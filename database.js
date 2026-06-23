@@ -5,6 +5,10 @@ const pool = new pg.Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+pool.on("error", (err) => {
+  console.error("Pool error:", err.message);
+});
+
 async function initDB() {
   try {
     await pool.query(`
