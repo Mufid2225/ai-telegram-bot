@@ -366,6 +366,14 @@ ${memoryContext}`,
   }
 });
 
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
 const PORT = process.env.PORT || 3000;
 
 http.createServer((req, res) => {
@@ -375,11 +383,21 @@ http.createServer((req, res) => {
   console.log(`Health check server running on port ${PORT}`);
 });
 
-bot.launch();
-console.log("Bot berjalan...");
+if (!process.env.BOT_TOKEN) {
+  console.error("BOT_TOKEN tidak di-set!");
+}
+
+(async () => {
+  try {
+    await bot.launch();
+    console.log("Bot berjalan...");
+  } catch (error) {
+    console.error("Bot gagal launch:", error.message);
+  }
+})();
 
 process.once("SIGTERM", async () => {
-  await pool.end();
+  try { await pool.end(); } catch {}
   bot.stop("SIGTERM");
   process.exit(0);
 });
