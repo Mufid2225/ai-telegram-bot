@@ -362,7 +362,7 @@ ${memoryContext}`,
     await ctx.reply(reply);
   } catch (error) {
     console.error(error);
-    await ctx.reply(`Error: ${error.message}`);
+    await ctx.reply(`Error: ${error.message || error.code || String(error)}`);
   }
 });
 
