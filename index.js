@@ -3,7 +3,6 @@ import pool from "./database.js";
 import dotenv from "dotenv";
 import { Telegraf } from "telegraf";
 import dayjs from "dayjs";
-import { tools, executeTool } from "./tools.js";
 import { getKnowledgeContext } from "./memory.js";
 import Tesseract from "tesseract.js";
 import pdf from "pdf-parse";
@@ -306,73 +305,47 @@ User baru kirim foto. Ini hasil OCR-nya. Bantu user.`,
 });
 
 async function callAI(messages, ctx) {
-  for (let turn = 0; turn < 5; turn++) {
-    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+  await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.ROUTER_MODEL,
-        messages,
-        tools,
-        tool_choice: "auto",
-        stream: false,
-      }),
-    });
+  const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.ROUTER_MODEL,
+      messages,
+      stream: false,
+    }),
+  });
 
-    const raw = await resp.text();
+  const raw = await resp.text();
 
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      const lines = raw.split("\n");
-      let content = "";
-      for (const line of lines) {
-        if (line.startsWith("data: ") && line !== "data: [DONE]") {
-          try {
-            const chunk = JSON.parse(line.slice(6));
-            if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
-              content += chunk.choices[0].delta.content;
-            }
-          } catch {}
-        }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    const lines = raw.split("\n");
+    let content = "";
+    for (const line of lines) {
+      if (line.startsWith("data: ") && line !== "data: [DONE]") {
+        try {
+          const chunk = JSON.parse(line.slice(6));
+          if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+            content += chunk.choices[0].delta.content;
+          }
+        } catch {}
       }
-      if (content) return content;
-      return "Maaf, respon AI kosong.";
     }
-
-    const choice = data.choices && data.choices[0];
-    if (!choice) return "Maaf, respon AI kosong.";
-
-    const msg = choice.message;
-
-    if (!msg.tool_calls || msg.tool_calls.length === 0) {
-      if (msg.content && msg.content.trim()) return msg.content;
-      return "Maaf, respon AI kosong.";
-    }
-
-    messages.push(msg);
-
-    for (const tc of msg.tool_calls) {
-      const args = JSON.parse(tc.function.arguments || "{}");
-      const result = await executeTool(tc.function.name, args, {
-        userId: ctx.from.id,
-        pool,
-      });
-      messages.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content: String(result),
-      });
-    }
+    return content || "Maaf, respon AI kosong.";
   }
 
-  return "Terlalu banyak tool calls.";
+  const choice = data.choices && data.choices[0];
+  if (!choice) return "Maaf, respon AI kosong.";
+
+  const content = choice.message.content;
+  return (content && content.trim()) ? content : "Maaf, respon AI kosong.";
 }
 
 bot.on("text", async (ctx) => {
@@ -427,12 +400,9 @@ Gaya bicara:
 - Kalo perlu list, pake tanda - aja
 
 Kemampuan:
-- Cek waktu & tanggal
-- Cari info di web
-- Nyimpen tugas, ujian, catatan
-- Hitung-hitungan
-- Baca file foto, PDF, DOCX (kalo user kirim file)
-- Ingat fakta tentang user pake tool remember/recall
+- Bantu tugas, deadline, jadwal sekolah
+- Baca & jelasin isi foto (OCR), PDF, DOCX
+- Nyimpen catatan penting otomatis
 
 Memory dari tugas/catatan:
 ${memoryContext}
