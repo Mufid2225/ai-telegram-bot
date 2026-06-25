@@ -2,17 +2,12 @@ import http from "http";
 import pool from "./database.js";
 import dotenv from "dotenv";
 import { Telegraf } from "telegraf";
-import OpenAI from "openai";
 import dayjs from "dayjs";
+import { tools, executeTool } from "./tools.js";
 
 dotenv.config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-
-const client = new OpenAI({
-  apiKey: process.env.ROUTER_API_KEY,
-  baseURL: process.env.ROUTER_BASE_URL,
-});
 
 function isImportantMessage(text) {
   const keywords = [
@@ -277,68 +272,10 @@ bot.on("photo", async (ctx) => {
   }
 });
 
-bot.on("text", async (ctx) => {
-  const userMessage = ctx.message.text;
-  let step = "start";
-
-  try {
-    step = "sendChatAction";
+async function callAI(messages, ctx) {
+  for (let turn = 0; turn < 5; turn++) {
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    step = "saveUserConv";
-    await saveConversation({
-      userId: ctx.from.id,
-      role: "user",
-      content: userMessage,
-    });
-
-    if (isImportantMessage(userMessage)) {
-      const extracted = extractTaskInfo(userMessage);
-      step = "saveMemory";
-      await saveMemory({
-        userId: ctx.from.id,
-        extracted,
-        content: userMessage,
-      });
-    }
-
-    step = "queryConv";
-    const convResult = await pool.query(
-      `SELECT role, content FROM conversations
-       WHERE user_id = $1
-       ORDER BY id DESC LIMIT 10`,
-      [ctx.from.id]
-    );
-    const conversations = convResult.rows.reverse();
-
-    step = "queryMem";
-    const words = userMessage.toLowerCase().split(" ").filter(word => word.length > 2);
-    let memories = [];
-    if (words.length > 0) {
-      const conditions = words.map((_, i) => `content ILIKE $${i + 1}`);
-      const values = words.map(word => `%${word}%`);
-      values.push(ctx.from.id);
-      const memResult = await pool.query(
-        `SELECT * FROM memories
-         WHERE user_id = $${words.length + 1} AND (${conditions.join(" OR ")})
-         ORDER BY id DESC LIMIT 5`,
-        values
-      );
-      memories = memResult.rows;
-    }
-
-    step = "buildContext";
-    const memoryContext = memories.length > 0
-      ? memories.reverse().map((m) => {
-          return `
-Type: ${m.type}
-Subject: ${m.subject || "-"}
-Deadline: ${m.deadline || "-"}
-Content: ${m.content}`;
-        }).join("\n")
-      : "Tidak ada memory relevan.";
-
-    step = "fetchAI";
     const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
@@ -347,72 +284,126 @@ Content: ${m.content}`;
       },
       body: JSON.stringify({
         model: process.env.ROUTER_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: `
-Kamu adalah asisten AI Telegram.
-
-Tugasmu:
-- membantu user mengingat tugas
-- membantu deadline
-- membantu jadwal
-- membantu catatan penting
-
-Pertahankan konteks percakapan.
-Jawab secara natural dan nyambung.
-
-Gunakan memory jika relevan.
-Jika tidak relevan, jawab normal.
-
-Memory User:
-${memoryContext}`,
-          },
-          ...conversations,
-          {
-            role: "user",
-            content: userMessage,
-          },
-        ],
+        messages,
+        tools,
+        tool_choice: "auto",
         stream: false,
       }),
     });
 
-    step = "parseAI";
     const raw = await resp.text();
-    let reply = "";
 
+    let data;
     try {
-      const json = JSON.parse(raw);
-      if (json.choices && json.choices[0].message) {
-        reply = json.choices[0].message.content;
-      } else {
-        reply = raw;
-      }
-    } catch (e) {
+      data = JSON.parse(raw);
+    } catch {
       const lines = raw.split("\n");
+      let content = "";
       for (const line of lines) {
         if (line.startsWith("data: ") && line !== "data: [DONE]") {
           try {
-            const data = JSON.parse(line.slice(6));
-            if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
-              reply += data.choices[0].delta.content;
+            const chunk = JSON.parse(line.slice(6));
+            if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+              content += chunk.choices[0].delta.content;
             }
-          } catch (err) {}
+          } catch {}
         }
       }
+      if (content) return content;
+      return "Maaf, respon AI kosong.";
     }
 
-    if (!reply) reply = "Maaf, respon AI kosong.";
+    const choice = data.choices && data.choices[0];
+    if (!choice) return "Maaf, respon AI kosong.";
 
-    step = "saveAI";
+    const msg = choice.message;
+
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      return msg.content || "Maaf, respon AI kosong.";
+    }
+
+    messages.push(msg);
+
+    for (const tc of msg.tool_calls) {
+      const args = JSON.parse(tc.function.arguments || "{}");
+      const result = await executeTool(tc.function.name, args, {
+        userId: ctx.from.id,
+        pool,
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: String(result),
+      });
+    }
+  }
+
+  return "Terlalu banyak tool calls.";
+}
+
+bot.on("text", async (ctx) => {
+  const userMessage = ctx.message.text;
+
+  try {
+    await saveConversation({ userId: ctx.from.id, role: "user", content: userMessage });
+
+    if (isImportantMessage(userMessage)) {
+      const extracted = extractTaskInfo(userMessage);
+      await saveMemory({ userId: ctx.from.id, extracted, content: userMessage });
+    }
+
+    const convResult = await pool.query(
+      `SELECT role, content FROM conversations
+       WHERE user_id = $1 ORDER BY id DESC LIMIT 10`,
+      [ctx.from.id]
+    );
+    const conversations = convResult.rows.reverse();
+
+    const words = userMessage.toLowerCase().split(" ").filter(w => w.length > 2);
+    let memories = [];
+    if (words.length > 0) {
+      const conditions = words.map((_, i) => `content ILIKE $${i + 1}`);
+      const values = words.map(w => `%${w}%`);
+      values.push(ctx.from.id);
+      const memResult = await pool.query(
+        `SELECT * FROM memories WHERE user_id = $${words.length + 1} AND (${conditions.join(" OR ")}) ORDER BY id DESC LIMIT 5`,
+        values
+      );
+      memories = memResult.rows;
+    }
+
+    const memoryContext = memories.length > 0
+      ? memories.reverse().map(m => `Type: ${m.type}\nSubject: ${m.subject || "-"}\nDeadline: ${m.deadline || "-"}\nContent: ${m.content}`).join("\n---\n")
+      : "Tidak ada memory relevan.";
+
+    const messages = [
+      {
+        role: "system",
+        content: `
+Kamu adalah asisten AI Telegram canggih dengan akses ke tools.
+
+Kemampuan:
+- Melihat waktu & tanggal saat ini
+- Mencari informasi di web
+- Menyimpan tugas, ujian, catatan ke database
+- Menghitung matematika
+
+Gunakan tools saat dibutuhkan. Jawab secara natural.
+
+Memory User saat ini:
+${memoryContext}`,
+      },
+      ...conversations,
+      { role: "user", content: userMessage },
+    ];
+
+    const reply = await callAI(messages, ctx);
+
     await saveConversation({ userId: ctx.from.id, role: "assistant", content: reply });
-
-    step = "reply";
     await ctx.reply(reply);
   } catch (error) {
-    console.error(`Step [${step}] error:`, error);
-    await ctx.reply(`Error at [${step}]: ${error.message || error.code || String(error)}`);
+    console.error("Text handler error:", error);
+    await ctx.reply(`Error: ${error.message || error.code || String(error)}`);
   }
 });
 
