@@ -13,8 +13,10 @@
   "dependencies": {
     "dayjs": "^1.11.20",
     "dotenv": "^17.4.2",
-    "openai": "^6.37.0",
+    "mammoth": "^1.9.0",
+    "pdf-parse": "^1.1.4",
     "pg": "^8.13.0",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "tesseract.js": "^5.1.0"
   }
 }

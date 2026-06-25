@@ -1,3 +1,5 @@
+import { storeFact, getFacts, deleteFacts } from "./memory.js";
+
 export const tools = [
   {
     type: "function",
@@ -44,10 +46,7 @@ export const tools = [
             description: "Type of item",
           },
           subject: { type: "string", description: "Subject/mata pelajaran" },
-          deadline: {
-            type: "string",
-            description: "Deadline date (YYYY-MM-DD)",
-          },
+          deadline: { type: "string", description: "Deadline date (YYYY-MM-DD)" },
           content: { type: "string", description: "Description of the task" },
         },
         required: ["content"],
@@ -62,12 +61,55 @@ export const tools = [
       parameters: {
         type: "object",
         properties: {
-          expression: {
-            type: "string",
-            description: "Math expression (e.g., '2 + 2 * 3')",
-          },
+          expression: { type: "string", description: "Math expression (e.g., '2 + 2 * 3')" },
         },
         required: ["expression"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "remember",
+      description: "Store a fact or information about the user (e.g., favorite subject, schedule, personal info, grades)",
+      parameters: {
+        type: "object",
+        properties: {
+          entity: { type: "string", description: "Subject/person/topic (e.g., 'mufid', 'matematika')" },
+          attribute: { type: "string", description: "Property name (e.g., 'favorit', 'jadwal', 'nilai')" },
+          value: { type: "string", description: "The fact/information" },
+          category: { type: "string", enum: ["sekolah", "pribadi", "tugas", "umum"], description: "Category" },
+        },
+        required: ["entity", "attribute", "value"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "recall",
+      description: "Search for stored facts and information about the user",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What to search for" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "forget",
+      description: "Delete stored facts about an entity",
+      parameters: {
+        type: "object",
+        properties: {
+          entity: { type: "string", description: "Entity name to delete" },
+          attribute: { type: "string", description: "Optional specific attribute to delete" },
+        },
+        required: ["entity"],
       },
     },
   },
@@ -77,7 +119,6 @@ function getCurrentTime(format = "full") {
   const now = new Date();
   const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
   const months = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-
   const day = days[now.getDay()];
   const date = now.getDate();
   const month = months[now.getMonth()];
@@ -85,31 +126,19 @@ function getCurrentTime(format = "full") {
   const h = String(now.getHours()).padStart(2, "0");
   const m = String(now.getMinutes()).padStart(2, "0");
   const s = String(now.getSeconds()).padStart(2, "0");
-  const iso = now.toISOString().split("T")[0];
-
   switch (format) {
-    case "date":
-      return `${day}, ${date} ${month} ${year} (${iso})`;
-    case "time":
-      return `${h}:${m}:${s}`;
-    case "day":
-      return day;
-    default:
-      return `${day}, ${date} ${month} ${year} ${h}:${m}:${s}`;
+    case "date": return `${day}, ${date} ${month} ${year}`;
+    case "time": return `${h}:${m}:${s}`;
+    case "day": return day;
+    default: return `${day}, ${date} ${month} ${year} ${h}:${m}:${s}`;
   }
 }
 
 async function searchWeb(query) {
   try {
-    const resp = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`
-    );
+    const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`);
     const data = await resp.json();
-    return (
-      data.AbstractText ||
-      data.AbstractSource ||
-      `Tidak ada hasil untuk "${query}".`
-    );
+    return data.AbstractText || data.AbstractSource || `Tidak ada hasil untuk "${query}".`;
   } catch {
     return `Gagal mencari "${query}".`;
   }
@@ -119,8 +148,7 @@ async function saveTask(args, { userId, pool }) {
   const type = args.type || "catatan";
   try {
     await pool.query(
-      `INSERT INTO memories (user_id, type, subject, deadline, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO memories (user_id, type, subject, deadline, content, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
       [userId, type, args.subject || null, args.deadline || null, args.content, new Date().toISOString()]
     );
     return `Berhasil menyimpan ${type}: ${args.content}`;
@@ -139,17 +167,43 @@ function calculate(expression) {
   }
 }
 
+async function handleRemember(args, { userId }) {
+  try {
+    await storeFact(userId, args.entity, args.attribute, args.value, args.category);
+    return `Oke, disimpan: ${args.entity} → ${args.attribute} = ${args.value}`;
+  } catch (error) {
+    return `Gagal menyimpan: ${error.message}`;
+  }
+}
+
+async function handleRecall(args, { userId }) {
+  try {
+    const facts = await getFacts(userId, args.query);
+    if (facts.length === 0) return `Tidak ada hasil untuk "${args.query}".`;
+    return facts.map(f => `- ${f.entity}: ${f.attribute} = ${f.value} (${f.category})`).join("\n");
+  } catch (error) {
+    return `Gagal mencari: ${error.message}`;
+  }
+}
+
+async function handleForget(args, { userId }) {
+  try {
+    await deleteFacts(userId, args.entity, args.attribute);
+    return `Fakta tentang "${args.entity}"${args.attribute ? ` (${args.attribute})` : ""} berhasil dihapus.`;
+  } catch (error) {
+    return `Gagal menghapus: ${error.message}`;
+  }
+}
+
 export async function executeTool(name, args, context) {
   switch (name) {
-    case "get_current_time":
-      return getCurrentTime(args.format);
-    case "search_web":
-      return await searchWeb(args.query);
-    case "save_task":
-      return await saveTask(args, context);
-    case "calculate":
-      return calculate(args.expression);
-    default:
-      return `Unknown tool: ${name}`;
+    case "get_current_time": return getCurrentTime(args.format);
+    case "search_web": return await searchWeb(args.query);
+    case "save_task": return await saveTask(args, context);
+    case "calculate": return calculate(args.expression);
+    case "remember": return await handleRemember(args, context);
+    case "recall": return await handleRecall(args, context);
+    case "forget": return await handleForget(args, context);
+    default: return `Unknown tool: ${name}`;
   }
 }

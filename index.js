@@ -4,6 +4,10 @@ import dotenv from "dotenv";
 import { Telegraf } from "telegraf";
 import dayjs from "dayjs";
 import { tools, executeTool } from "./tools.js";
+import { getKnowledgeContext } from "./memory.js";
+import Tesseract from "tesseract.js";
+import pdf from "pdf-parse";
+import mammoth from "mammoth";
 
 dotenv.config();
 
@@ -376,6 +380,8 @@ bot.on("text", async (ctx) => {
       ? memories.reverse().map(m => `Type: ${m.type}\nSubject: ${m.subject || "-"}\nDeadline: ${m.deadline || "-"}\nContent: ${m.content}`).join("\n---\n")
       : "Tidak ada memory relevan.";
 
+    const knowledgeContext = await getKnowledgeContext(ctx.from.id);
+
     const messages = [
       {
         role: "system",
@@ -384,6 +390,7 @@ Kamu asisten Telegram yang santai dan helpful.
 
 Gaya bicara:
 - Natural, kayak ngobrol sama temen
+- JANGAN pakai emoji sama sekali
 - Ga usah pake ** atau markdown apapun
 - Ga usah kaku, santai aja
 - Tetep informatif tapi mengalir
@@ -394,9 +401,12 @@ Kemampuan:
 - Cari info di web
 - Nyimpen tugas, ujian, catatan
 - Hitung-hitungan
+- Baca file foto, PDF, DOCX (kalo user kirim file)
+- Ingat fakta tentang user pake tool remember/recall
 
-Memory User saat ini:
-${memoryContext}`,
+Memory dari tugas/catatan:
+${memoryContext}
+${knowledgeContext}`,
       },
       ...conversations,
       { role: "user", content: userMessage },
@@ -409,6 +419,95 @@ ${memoryContext}`,
   } catch (error) {
     console.error("Text handler error:", error);
     await ctx.reply(`Error: ${error.message || error.code || String(error)}`);
+  }
+});
+
+// ── File Processing ──────────────────────────────────
+
+async function downloadFile(fileId) {
+  const link = await bot.telegram.getFileLink(fileId);
+  const resp = await fetch(link);
+  return Buffer.from(await resp.arrayBuffer());
+}
+
+bot.on("photo", async (ctx) => {
+  try {
+    const photo = ctx.message.photo[ctx.message.photo.length - 1];
+    const caption = ctx.message.caption || "";
+
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+
+    const buffer = await downloadFile(photo.file_id);
+    const { data } = await Tesseract.recognize(buffer, "ind+eng");
+    const ocrText = data.text.trim();
+
+    const text = caption
+      ? `User kirim foto. Caption: ${caption}\n\nHasil OCR dari foto:\n${ocrText || "(tidak ada teks terdeteksi)"}`
+      : `User kirim foto.\n\nHasil OCR dari foto:\n${ocrText || "(tidak ada teks terdeteksi)"}`;
+
+    await saveConversation({ userId: ctx.from.id, role: "user", content: text });
+
+    const messages = [
+      {
+        role: "system",
+        content: "Kamu asisten Telegram. User baru aja kirim foto. Ini hasil OCR-nya. Bantu user sesuai isi foto.",
+      },
+      { role: "user", content: text },
+    ];
+
+    const reply = await callAI(messages, ctx);
+    await saveConversation({ userId: ctx.from.id, role: "assistant", content: reply });
+    await ctx.reply(reply);
+  } catch (error) {
+    console.error("Photo handler error:", error);
+    await ctx.reply(`Gagal proses foto: ${error.message}`);
+  }
+});
+
+bot.on("document", async (ctx) => {
+  try {
+    const doc = ctx.message.document;
+    const caption = ctx.message.caption || "";
+    const mime = doc.mime_type || "";
+
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+
+    const buffer = await downloadFile(doc.file_id);
+    let extracted = "";
+
+    if (mime === "application/pdf") {
+      const data = await pdf(buffer);
+      extracted = data.text;
+    } else if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      const { value } = await mammoth.extractRawText({ buffer });
+      extracted = value;
+    } else if (mime.startsWith("image/")) {
+      const { data } = await Tesseract.recognize(buffer, "ind+eng");
+      extracted = data.text;
+    } else {
+      extracted = `File terkirim: ${doc.file_name} (${mime}). Belum bisa diproses.`;
+    }
+
+    const text = caption
+      ? `User kirim file: ${doc.file_name}. Caption: ${caption}\n\nIsi file:\n${extracted}`
+      : `User kirim file: ${doc.file_name}.\n\nIsi file:\n${extracted}`;
+
+    await saveConversation({ userId: ctx.from.id, role: "user", content: text });
+
+    const messages = [
+      {
+        role: "system",
+        content: "Kamu asisten Telegram. User kirim file. Ini isinya. Bantu user.",
+      },
+      { role: "user", content: text },
+    ];
+
+    const reply = await callAI(messages, ctx);
+    await saveConversation({ userId: ctx.from.id, role: "assistant", content: reply });
+    await ctx.reply(reply);
+  } catch (error) {
+    console.error("Document handler error:", error);
+    await ctx.reply(`Gagal proses file: ${error.message}`);
   }
 });
 

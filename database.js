@@ -43,6 +43,17 @@ async function initDB() {
         created_at TEXT
       )
     `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS knowledge (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT,
+        entity TEXT,
+        attribute TEXT,
+        value TEXT,
+        category TEXT,
+        created_at TEXT
+      )
+    `);
     client.release();
     console.log("Database siap.");
   } catch (error) {
