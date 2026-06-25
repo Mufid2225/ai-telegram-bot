@@ -244,8 +244,12 @@ bot.command("test", async (ctx) => {
     const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.ROUTER_API_KEY}` },
-      body: JSON.stringify({ model: process.env.ROUTER_MODEL, messages: [{ role: "user", content: "hai" }] }),
+      body: JSON.stringify({ model: process.env.ROUTER_MODEL, messages: [{ role: "user", content: "hai" }], stream: false }),
     });
+    if (resp.status === 429) {
+      await ctx.reply("Rate limit kena, coba 5 detik lagi.");
+      return;
+    }
     const text = await resp.text();
     await ctx.reply(`Status: ${resp.status}\nResponse: ${text.slice(0, 200)}`);
   } catch (e) {
@@ -305,47 +309,62 @@ User baru kirim foto. Ini hasil OCR-nya. Bantu user.`,
 });
 
 async function callAI(messages, ctx) {
-  await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+  for (let retry = 0; retry < 3; retry++) {
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-  const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: process.env.ROUTER_MODEL,
-      messages,
-      stream: false,
-    }),
-  });
+    const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.ROUTER_MODEL,
+        messages,
+        stream: false,
+      }),
+    });
 
-  const raw = await resp.text();
-
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    const lines = raw.split("\n");
-    let content = "";
-    for (const line of lines) {
-      if (line.startsWith("data: ") && line !== "data: [DONE]") {
-        try {
-          const chunk = JSON.parse(line.slice(6));
-          if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
-            content += chunk.choices[0].delta.content;
-          }
-        } catch {}
-      }
+    if (resp.status === 429 && retry < 2) {
+      await new Promise(r => setTimeout(r, 2000 * (retry + 1)));
+      continue;
     }
-    return content || "Maaf, respon AI kosong.";
+
+    if (!resp.ok) {
+      return `AI error (${resp.status})`;
+    }
+
+    const raw = await resp.text();
+    if (!raw.trim()) continue;
+
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      const lines = raw.split("\n");
+      let content = "";
+      for (const line of lines) {
+        if (line.startsWith("data: ") && line !== "data: [DONE]") {
+          try {
+            const chunk = JSON.parse(line.slice(6));
+            if (chunk.choices && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+              content += chunk.choices[0].delta.content;
+            }
+          } catch {}
+        }
+      }
+      if (content) return content;
+      return "Maaf, respon AI kosong.";
+    }
+
+    const choice = data.choices && data.choices[0];
+    if (!choice) return "Maaf, respon AI kosong.";
+
+    const content = choice.message.content;
+    if (content && content.trim()) return content;
+    return "Maaf, respon AI kosong.";
   }
-
-  const choice = data.choices && data.choices[0];
-  if (!choice) return "Maaf, respon AI kosong.";
-
-  const content = choice.message.content;
-  return (content && content.trim()) ? content : "Maaf, respon AI kosong.";
+  return "AI sibuk, coba lagi nanti.";
 }
 
 bot.on("text", async (ctx) => {
