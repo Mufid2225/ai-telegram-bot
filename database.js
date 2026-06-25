@@ -11,7 +11,7 @@ if (!url) {
 const pool = new pg.Pool({
   connectionString: url,
   ssl: { rejectUnauthorized: false },
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
 });
 
 pool.on("error", (err) => {
