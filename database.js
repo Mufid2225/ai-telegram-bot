@@ -1,8 +1,17 @@
 import pg from "pg";
 
+const url = process.env.DATABASE_URL;
+if (!url) {
+  console.error("DATABASE_URL tidak di-set!");
+} else {
+  const masked = url.replace(/:[^:@]+@/, ":***@");
+  console.log("DATABASE_URL:", masked);
+}
+
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: url,
   ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 5000,
 });
 
 pool.on("error", (err) => {
@@ -11,7 +20,8 @@ pool.on("error", (err) => {
 
 async function initDB() {
   try {
-    await pool.query(`
+    const client = await pool.connect();
+    await client.query(`
       CREATE TABLE IF NOT EXISTS memories (
         id SERIAL PRIMARY KEY,
         user_id TEXT,
@@ -24,8 +34,7 @@ async function initDB() {
         created_at TEXT
       )
     `);
-
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS conversations (
         id SERIAL PRIMARY KEY,
         user_id TEXT,
@@ -34,6 +43,7 @@ async function initDB() {
         created_at TEXT
       )
     `);
+    client.release();
     console.log("Database siap.");
   } catch (error) {
     console.error("Database gagal init:", error.message);
