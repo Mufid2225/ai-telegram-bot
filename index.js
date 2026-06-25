@@ -280,7 +280,19 @@ bot.on("photo", async (ctx) => {
     await saveConversation({ userId: ctx.from.id, role: "user", content: text });
 
     const msg = [
-      { role: "system", content: "Kamu asisten Telegram. User baru kirim foto, ini hasil OCR-nya. Bantu user." },
+      {
+        role: "system",
+        content: `
+Kamu asisten Telegram yang santai dan helpful.
+
+Gaya bicara:
+- Natural, kayak ngobrol sama temen
+- JANGAN pakai emoji sama sekali
+- Ga usah pake ** atau markdown apapun
+- Ga usah kaku, santai aja
+
+User baru kirim foto. Ini hasil OCR-nya. Bantu user.`,
+      },
       { role: "user", content: text },
     ];
 
@@ -340,7 +352,8 @@ async function callAI(messages, ctx) {
     const msg = choice.message;
 
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
-      return msg.content || "Maaf, respon AI kosong.";
+      if (msg.content && msg.content.trim()) return msg.content;
+      return "Maaf, respon AI kosong.";
     }
 
     messages.push(msg);
@@ -480,7 +493,16 @@ bot.on("document", async (ctx) => {
     const messages = [
       {
         role: "system",
-        content: "Kamu asisten Telegram. User kirim file. Ini isinya. Bantu user.",
+        content: `
+Kamu asisten Telegram yang santai dan helpful.
+
+Gaya bicara:
+- Natural, kayak ngobrol sama temen
+- JANGAN pakai emoji sama sekali
+- Ga usah pake ** atau markdown apapun
+- Ga usah kaku, santai aja
+
+User kirim file. Ini isinya. Bantu user.`,
       },
       { role: "user", content: text },
     ];
