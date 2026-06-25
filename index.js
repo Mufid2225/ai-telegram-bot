@@ -333,7 +333,7 @@ Content: ${m.content}`;
         }).join("\n")
       : "Tidak ada memory relevan.";
 
-    const completion = await client.chat.completions.create({
+    const requestBody = {
       model: process.env.ROUTER_MODEL,
       messages: [
         {
@@ -351,7 +351,6 @@ Pertahankan konteks percakapan.
 Jawab secara natural dan nyambung.
 
 Gunakan memory jika relevan.
-
 Jika tidak relevan, jawab normal.
 
 Memory User:
@@ -363,9 +362,47 @@ ${memoryContext}`,
           content: userMessage,
         },
       ],
+      stream: false,
+    };
+
+    const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
+      },
+      body: JSON.stringify(requestBody),
     });
 
-    const reply = completion.choices[0].message.content;
+    const text = await resp.text();
+    let reply = "";
+
+    try {
+      // Coba parse JSON biasa
+      const json = JSON.parse(text);
+      if (json.choices && json.choices[0].message) {
+        reply = json.choices[0].message.content;
+      } else {
+        reply = text; // fallback
+      }
+    } catch (e) {
+      // Kalau format streaming (SSE)
+      const lines = text.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ") && line !== "data: [DONE]") {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+              reply += data.choices[0].delta.content;
+            }
+          } catch (err) {}
+        }
+      }
+    }
+
+    if (!reply) {
+      reply = "Maaf, respon AI kosong.";
+    }
 
     await saveConversation({
       userId: ctx.from.id,
