@@ -278,11 +278,14 @@ bot.on("photo", async (ctx) => {
 });
 
 bot.on("text", async (ctx) => {
-  try {
-    const userMessage = ctx.message.text;
+  const userMessage = ctx.message.text;
+  let step = "start";
 
+  try {
+    step = "sendChatAction";
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
+    step = "saveUserConv";
     await saveConversation({
       userId: ctx.from.id,
       role: "user",
@@ -291,6 +294,7 @@ bot.on("text", async (ctx) => {
 
     if (isImportantMessage(userMessage)) {
       const extracted = extractTaskInfo(userMessage);
+      step = "saveMemory";
       await saveMemory({
         userId: ctx.from.id,
         extracted,
@@ -298,6 +302,7 @@ bot.on("text", async (ctx) => {
       });
     }
 
+    step = "queryConv";
     const convResult = await pool.query(
       `SELECT role, content FROM conversations
        WHERE user_id = $1
@@ -306,14 +311,13 @@ bot.on("text", async (ctx) => {
     );
     const conversations = convResult.rows.reverse();
 
+    step = "queryMem";
     const words = userMessage.toLowerCase().split(" ").filter(word => word.length > 2);
-
     let memories = [];
     if (words.length > 0) {
       const conditions = words.map((_, i) => `content ILIKE $${i + 1}`);
       const values = words.map(word => `%${word}%`);
       values.push(ctx.from.id);
-
       const memResult = await pool.query(
         `SELECT * FROM memories
          WHERE user_id = $${words.length + 1} AND (${conditions.join(" OR ")})
@@ -323,6 +327,7 @@ bot.on("text", async (ctx) => {
       memories = memResult.rows;
     }
 
+    step = "buildContext";
     const memoryContext = memories.length > 0
       ? memories.reverse().map((m) => {
           return `
@@ -333,12 +338,19 @@ Content: ${m.content}`;
         }).join("\n")
       : "Tidak ada memory relevan.";
 
-    const requestBody = {
-      model: process.env.ROUTER_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: `
+    step = "fetchAI";
+    const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.ROUTER_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: `
 Kamu adalah asisten AI Telegram.
 
 Tugasmu:
@@ -355,39 +367,30 @@ Jika tidak relevan, jawab normal.
 
 Memory User:
 ${memoryContext}`,
-        },
-        ...conversations,
-        {
-          role: "user",
-          content: userMessage,
-        },
-      ],
-      stream: false,
-    };
-
-    const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.ROUTER_API_KEY}`,
-      },
-      body: JSON.stringify(requestBody),
+          },
+          ...conversations,
+          {
+            role: "user",
+            content: userMessage,
+          },
+        ],
+        stream: false,
+      }),
     });
 
-    const text = await resp.text();
+    step = "parseAI";
+    const raw = await resp.text();
     let reply = "";
 
     try {
-      // Coba parse JSON biasa
-      const json = JSON.parse(text);
+      const json = JSON.parse(raw);
       if (json.choices && json.choices[0].message) {
         reply = json.choices[0].message.content;
       } else {
-        reply = text; // fallback
+        reply = raw;
       }
     } catch (e) {
-      // Kalau format streaming (SSE)
-      const lines = text.split("\n");
+      const lines = raw.split("\n");
       for (const line of lines) {
         if (line.startsWith("data: ") && line !== "data: [DONE]") {
           try {
@@ -400,20 +403,16 @@ ${memoryContext}`,
       }
     }
 
-    if (!reply) {
-      reply = "Maaf, respon AI kosong.";
-    }
+    if (!reply) reply = "Maaf, respon AI kosong.";
 
-    await saveConversation({
-      userId: ctx.from.id,
-      role: "assistant",
-      content: reply,
-    });
+    step = "saveAI";
+    await saveConversation({ userId: ctx.from.id, role: "assistant", content: reply });
 
+    step = "reply";
     await ctx.reply(reply);
   } catch (error) {
-    console.error(error);
-    await ctx.reply(`Error: ${error.message || error.code || String(error)}`);
+    console.error(`Step [${step}] error:`, error);
+    await ctx.reply(`Error at [${step}]: ${error.message || error.code || String(error)}`);
   }
 });
 
