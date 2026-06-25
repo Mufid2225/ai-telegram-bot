@@ -256,23 +256,40 @@ bot.command("test", async (ctx) => {
 
 bot.on("photo", async (ctx) => {
   try {
-    const photos = ctx.message.photo;
-    const biggestPhoto = photos[photos.length - 1];
+    const photo = ctx.message.photo[ctx.message.photo.length - 1];
     const caption = ctx.message.caption || "";
-    const extracted = extractTaskInfo(caption);
 
-    await saveMemory({
-      userId: ctx.from.id,
-      extracted,
-      content: caption,
-      fileId: biggestPhoto.file_id,
-      fileType: "photo",
-    });
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    await ctx.reply("Foto berhasil disimpan.");
+    const link = await bot.telegram.getFileLink(photo.file_id);
+    const resp = await fetch(link);
+    const buffer = Buffer.from(await resp.arrayBuffer());
+
+    const { data } = await Tesseract.recognize(buffer, "ind+eng");
+    const ocrText = data.text.trim();
+
+    if (caption) {
+      const extracted = extractTaskInfo(caption);
+      await saveMemory({ userId: ctx.from.id, extracted, content: caption, fileId: photo.file_id, fileType: "photo" });
+    }
+
+    const text = caption
+      ? `User kirim foto. Caption: ${caption}\n\nHasil OCR:\n${ocrText || "(tidak ada teks)"}`
+      : `User kirim foto.\n\nHasil OCR:\n${ocrText || "(tidak ada teks)"}`;
+
+    await saveConversation({ userId: ctx.from.id, role: "user", content: text });
+
+    const msg = [
+      { role: "system", content: "Kamu asisten Telegram. User baru kirim foto, ini hasil OCR-nya. Bantu user." },
+      { role: "user", content: text },
+    ];
+
+    const reply = await callAI(msg, ctx);
+    await saveConversation({ userId: ctx.from.id, role: "assistant", content: reply });
+    await ctx.reply(reply);
   } catch (error) {
-    console.error(error);
-    await ctx.reply("Gagal menyimpan foto.");
+    console.error("Photo error:", error);
+    await ctx.reply(`Gagal proses foto: ${error.message}`);
   }
 });
 
@@ -429,40 +446,6 @@ async function downloadFile(fileId) {
   const resp = await fetch(link);
   return Buffer.from(await resp.arrayBuffer());
 }
-
-bot.on("photo", async (ctx) => {
-  try {
-    const photo = ctx.message.photo[ctx.message.photo.length - 1];
-    const caption = ctx.message.caption || "";
-
-    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
-
-    const buffer = await downloadFile(photo.file_id);
-    const { data } = await Tesseract.recognize(buffer, "ind+eng");
-    const ocrText = data.text.trim();
-
-    const text = caption
-      ? `User kirim foto. Caption: ${caption}\n\nHasil OCR dari foto:\n${ocrText || "(tidak ada teks terdeteksi)"}`
-      : `User kirim foto.\n\nHasil OCR dari foto:\n${ocrText || "(tidak ada teks terdeteksi)"}`;
-
-    await saveConversation({ userId: ctx.from.id, role: "user", content: text });
-
-    const messages = [
-      {
-        role: "system",
-        content: "Kamu asisten Telegram. User baru aja kirim foto. Ini hasil OCR-nya. Bantu user sesuai isi foto.",
-      },
-      { role: "user", content: text },
-    ];
-
-    const reply = await callAI(messages, ctx);
-    await saveConversation({ userId: ctx.from.id, role: "assistant", content: reply });
-    await ctx.reply(reply);
-  } catch (error) {
-    console.error("Photo handler error:", error);
-    await ctx.reply(`Gagal proses foto: ${error.message}`);
-  }
-});
 
 bot.on("document", async (ctx) => {
   try {
