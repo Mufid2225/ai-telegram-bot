@@ -241,6 +241,20 @@ bot.command("remind", async (ctx) => {
   }
 });
 
+bot.command("test", async (ctx) => {
+  try {
+    const resp = await fetch(`${process.env.ROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.ROUTER_API_KEY}` },
+      body: JSON.stringify({ model: process.env.ROUTER_MODEL, messages: [{ role: "user", content: "hai" }] }),
+    });
+    const text = await resp.text();
+    await ctx.reply(`Status: ${resp.status}\nResponse: ${text.slice(0, 200)}`);
+  } catch (e) {
+    await ctx.reply(`Fetch error: ${e.cause || e.code || e.message}`);
+  }
+});
+
 bot.on("photo", async (ctx) => {
   try {
     const photos = ctx.message.photo;
