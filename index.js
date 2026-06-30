@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { Telegraf } from "telegraf";
 import dayjs from "dayjs";
 import { getKnowledgeContext } from "./memory.js";
+import { detectSymbol, getQuote, getNews, getMarketNews, buildMarketContext } from "./market.js";
 import Tesseract from "tesseract.js";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
@@ -257,6 +258,155 @@ bot.command("test", async (ctx) => {
   }
 });
 
+// ── Trading Commands ─────────────────────────────────
+
+bot.command("saham", async (ctx) => {
+  try {
+    const args = ctx.message.text.split(" ");
+    const raw = args.slice(1).join(" ");
+    if (!raw) return ctx.reply("Contoh: /saham BBCA atau /saham AAPL");
+
+    let symbol = raw.toUpperCase();
+    if (!symbol.includes(".") && !symbol.includes("=") && !symbol.includes("^")) {
+      const usStocks = ["AAPL","MSFT","GOOGL","AMZN","TSLA","META","NVDA","AMD","INTC","NFLX"];
+      if (!usStocks.includes(symbol)) symbol += ".JK";
+    }
+
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+
+    const [quote, news] = await Promise.all([
+      getQuote(symbol),
+      getNews(symbol, 4),
+    ]);
+
+    if (!quote) return ctx.reply(`Data saham "${raw}" tidak ditemukan. Coba kode yang benar (contoh: BBCA.JK, AAPL).`);
+
+    const marketCtx = buildMarketContext(quote, news);
+    const messages = [
+      {
+        role: "system",
+        content: `
+Kamu analis saham profesional.
+
+Gaya bicara:
+- Natural, santai, kayak ngobrol
+- JANGAN pakai emoji
+- Ga usah pake markdown atau **
+
+Tugas:
+Analisa saham ${quote.name} (${quote.symbol}) berdasarkan data real-time.
+Berikan pendapat apakah saham ini menarik, potensi risikonya, dan sentimen dari berita terbaru.
+${marketCtx}`,
+      },
+      {
+        role: "user",
+        content: `Analisa saham ${quote.symbol} (${quote.name}) untuk hari ini.`,
+      },
+    ];
+
+    const reply = await callAI(messages, ctx);
+    await ctx.reply(reply);
+  } catch (error) {
+    console.error("/saham error:", error);
+    await ctx.reply(`Gagal analisa saham: ${error.message}`);
+  }
+});
+
+bot.command("trade", async (ctx) => {
+  try {
+    const args = ctx.message.text.split(" ");
+    const raw = args.slice(1).join(" ");
+    if (!raw) return ctx.reply("Contoh: /trade XAUUSD, /trade EURUSD, /trade BTC");
+
+    let symbol = detectSymbol(raw);
+    if (!symbol) {
+      const upper = raw.toUpperCase();
+      if (["GC","SI","CL","NG"].includes(upper)) symbol = `${upper}=F`;
+      else if (["XAUUSD","XAGUSD","EURUSD","GBPUSD","USDJPY","USDCAD","AUDUSD","NZDUSD"].includes(upper)) symbol = `${upper}=X`;
+      else if (["BTC","ETH"].includes(upper)) symbol = `${upper}-USD`;
+      else symbol = raw;
+    }
+
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+
+    const [quote, news] = await Promise.all([
+      getQuote(symbol),
+      getNews(raw, 4),
+    ]);
+
+    if (!quote) return ctx.reply(`Data untuk "${raw}" tidak ditemukan. Coba kode yang benar.`);
+
+    const marketCtx = buildMarketContext(quote, news);
+    const messages = [
+      {
+        role: "system",
+        content: `
+Kamu analis trading profesional.
+
+Gaya bicara:
+- Natural, santai, kayak ngobrol
+- JANGAN pakai emoji
+- Ga usah pake markdown atau **
+
+Tugas:
+Analisa ${quote.name} (${quote.symbol}) berdasarkan data real-time.
+Berikan pandangan teknikal singkat, sentimen pasar, dan level penting (support/resistance).
+${marketCtx}`,
+      },
+      {
+        role: "user",
+        content: `Analisa ${quote.symbol} (${quote.name}) untuk trading hari ini.`,
+      },
+    ];
+
+    const reply = await callAI(messages, ctx);
+    await ctx.reply(reply);
+  } catch (error) {
+    console.error("/trade error:", error);
+    await ctx.reply(`Gagal analisa: ${error.message}`);
+  }
+});
+
+bot.command("ekonomi", async (ctx) => {
+  try {
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+    const news = await getMarketNews(8);
+
+    if (news.length === 0) return ctx.reply("Belum ada berita ekonomi terkini.");
+
+    const newsCtx = news.map((n, i) => `${i + 1}. ${n.title}${n.publisher ? ` (${n.publisher})` : ""}`).join("\n");
+
+    const messages = [
+      {
+        role: "system",
+        content: `
+Kamu analis ekonomi.
+
+Gaya bicara:
+- Natural, santai, kayak ngobrol
+- JANGAN pakai emoji
+- Ga usah pake markdown atau **
+
+Tugas:
+Rangkum berita ekonomi terkini dan kaitkan dampaknya ke pasar saham, komoditas, dan forex.
+
+Berita terkini:
+${newsCtx}`,
+      },
+      {
+        role: "user",
+        content: "Rangkum berita ekonomi hari ini dan dampaknya ke market.",
+      },
+    ];
+
+    const reply = await callAI(messages, ctx);
+    await ctx.reply(reply);
+  } catch (error) {
+    console.error("/ekonomi error:", error);
+    await ctx.reply(`Gagal ambil berita: ${error.message}`);
+  }
+});
+
 bot.on("photo", async (ctx) => {
   try {
     const photo = ctx.message.photo[ctx.message.photo.length - 1];
@@ -404,6 +554,21 @@ bot.on("text", async (ctx) => {
 
     const knowledgeContext = await getKnowledgeContext(ctx.from.id);
 
+    let marketCtx = "";
+    const detectedSymbol = detectSymbol(userMessage);
+    if (detectedSymbol) {
+      const [q, n] = await Promise.all([getQuote(detectedSymbol), getNews(detectedSymbol, 3)]);
+      if (q) marketCtx = buildMarketContext(q, n);
+    } else {
+      const marketWords = ["saham", "forex", "komoditas", "cpi", "ppi", "inflasi", "suku bunga", "trading", "analisa", "berita ekonomi", "emas", "minyak", "xauusd", "btc", "bitcoin", "eurusd", "ihsg"];
+      if (marketWords.some(w => userMessage.toLowerCase().includes(w))) {
+        const macroNews = await getMarketNews(3);
+        if (macroNews.length > 0) {
+          marketCtx = "\n--- Berita Ekonomi Terkini ---\n" + macroNews.map(n => `- ${n.title}`).join("\n");
+        }
+      }
+    }
+
     const messages = [
       {
         role: "system",
@@ -422,10 +587,12 @@ Kemampuan:
 - Bantu tugas, deadline, jadwal sekolah
 - Baca & jelasin isi foto (OCR), PDF, DOCX
 - Nyimpen catatan penting otomatis
+- Analisa saham, komoditas, forex, berita ekonomi
 
 Memory dari tugas/catatan:
 ${memoryContext}
-${knowledgeContext}`,
+${knowledgeContext}
+${marketCtx}`,
       },
       ...conversations,
       { role: "user", content: userMessage },
