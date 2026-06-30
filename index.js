@@ -5,6 +5,7 @@ import { Telegraf } from "telegraf";
 import dayjs from "dayjs";
 import { getKnowledgeContext } from "./memory.js";
 import { detectSymbol, getQuote, getNews, getMarketNews, buildMarketContext } from "./market.js";
+import * as alpha from "./alpha.js";
 import Tesseract from "tesseract.js";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
@@ -274,14 +275,15 @@ bot.command("saham", async (ctx) => {
 
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    const [quote, news] = await Promise.all([
+    const [quote, news, avSentiment] = await Promise.all([
       getQuote(symbol),
       getNews(symbol, 4),
+      alpha.getNewsSentiment({ tickers: [symbol.replace(".JK", "")], limit: 4 }),
     ]);
 
     if (!quote) return ctx.reply(`Data saham "${raw}" tidak ditemukan. Coba kode yang benar (contoh: BBCA.JK, AAPL).`);
 
-    const marketCtx = buildMarketContext(quote, news);
+    const marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
     const messages = [
       {
         role: "system",
@@ -329,14 +331,15 @@ bot.command("trade", async (ctx) => {
 
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    const [quote, news] = await Promise.all([
+    const [quote, news, avSentiment] = await Promise.all([
       getQuote(symbol),
       getNews(raw, 4),
+      alpha.getNewsSentiment({ topics: ["commodities", "forex", "financial_markets"], limit: 4 }),
     ]);
 
     if (!quote) return ctx.reply(`Data untuk "${raw}" tidak ditemukan. Coba kode yang benar.`);
 
-    const marketCtx = buildMarketContext(quote, news);
+    const marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
     const messages = [
       {
         role: "system",
@@ -370,11 +373,23 @@ ${marketCtx}`,
 bot.command("ekonomi", async (ctx) => {
   try {
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
-    const news = await getMarketNews(8);
 
-    if (news.length === 0) return ctx.reply("Belum ada berita ekonomi terkini.");
+    const [news, cpi, fedRate, inflation] = await Promise.all([
+      getMarketNews(6),
+      alpha.getCPI(),
+      alpha.getFedRate(),
+      alpha.getInflation(),
+    ]);
 
-    const newsCtx = news.map((n, i) => `${i + 1}. ${n.title}${n.publisher ? ` (${n.publisher})` : ""}`).join("\n");
+    let ecoCtx = "";
+    if (news.length) {
+      ecoCtx = "Berita terkini:\n" + news.map((n, i) => `${i + 1}. ${n.title}`).join("\n");
+    }
+    ecoCtx += alpha.formatIndicator(cpi, "CPI (Inflasi) 3 bulan terakhir");
+    ecoCtx += alpha.formatIndicator(fedRate, "Fed Funds Rate 3 bulan terakhir");
+    ecoCtx += alpha.formatIndicator(inflation, "Inflasi 3 tahun terakhir");
+
+    if (!ecoCtx.trim()) return ctx.reply("Belum ada data ekonomi terkini.");
 
     const messages = [
       {
@@ -388,14 +403,13 @@ Gaya bicara:
 - Ga usah pake markdown atau **
 
 Tugas:
-Rangkum berita ekonomi terkini dan kaitkan dampaknya ke pasar saham, komoditas, dan forex.
+Rangkum data ekonomi terkini, kaitkan dengan dampaknya ke pasar saham, komoditas, dan forex.
 
-Berita terkini:
-${newsCtx}`,
+${ecoCtx}`,
       },
       {
         role: "user",
-        content: "Rangkum berita ekonomi hari ini dan dampaknya ke market.",
+        content: "Analisa data ekonomi hari ini dan dampaknya ke market.",
       },
     ];
 
@@ -557,15 +571,23 @@ bot.on("text", async (ctx) => {
     let marketCtx = "";
     const detectedSymbol = detectSymbol(userMessage);
     if (detectedSymbol) {
-      const [q, n] = await Promise.all([getQuote(detectedSymbol), getNews(detectedSymbol, 3)]);
-      if (q) marketCtx = buildMarketContext(q, n);
+      const [q, n, av] = await Promise.all([
+        getQuote(detectedSymbol),
+        getNews(detectedSymbol, 3),
+        alpha.getNewsSentiment({ tickers: [detectedSymbol], limit: 3 }),
+      ]);
+      if (q) marketCtx = buildMarketContext(q, n) + alpha.formatSentiment(av);
     } else {
       const marketWords = ["saham", "forex", "komoditas", "cpi", "ppi", "inflasi", "suku bunga", "trading", "analisa", "berita ekonomi", "emas", "minyak", "xauusd", "btc", "bitcoin", "eurusd", "ihsg"];
       if (marketWords.some(w => userMessage.toLowerCase().includes(w))) {
-        const macroNews = await getMarketNews(3);
-        if (macroNews.length > 0) {
+        const [macroNews, avMacro] = await Promise.all([
+          getMarketNews(3),
+          alpha.getNewsSentiment({ topics: ["economy", "financial_markets"], limit: 3 }),
+        ]);
+        if (macroNews.length) {
           marketCtx = "\n--- Berita Ekonomi Terkini ---\n" + macroNews.map(n => `- ${n.title}`).join("\n");
         }
+        marketCtx += alpha.formatSentiment(avMacro);
       }
     }
 
