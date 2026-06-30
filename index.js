@@ -275,15 +275,24 @@ bot.command("saham", async (ctx) => {
 
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    const [quote, news, avSentiment] = await Promise.all([
+    const ticker = symbol.replace(".JK", "").replace("=F", "").replace("=X", "").replace("-USD", "");
+    const [quote, news, avSentiment, fundamental, earnings, rsi, topMovers] = await Promise.all([
       getQuote(symbol),
       getNews(symbol, 4),
-      alpha.getNewsSentiment({ tickers: [symbol.replace(".JK", "")], limit: 4 }),
+      alpha.getNewsSentiment({ tickers: [ticker], limit: 4 }),
+      alpha.getCompanyOverview(ticker).catch(() => null),
+      alpha.getEarnings(ticker).catch(() => null),
+      alpha.getRSI(ticker).catch(() => null),
+      alpha.getTopGainersLosers().catch(() => null),
     ]);
 
     if (!quote) return ctx.reply(`Data saham "${raw}" tidak ditemukan. Coba kode yang benar (contoh: BBCA.JK, AAPL).`);
 
-    const marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
+    let marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
+    if (fundamental) marketCtx += "\n" + alpha.formatFundamentals(fundamental);
+    if (earnings) marketCtx += "\n" + alpha.formatEarnings(earnings);
+    if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
+    if (topMovers) marketCtx += "\n" + alpha.formatTopGainers(topMovers);
     const messages = [
       {
         role: "system",
@@ -331,15 +340,29 @@ bot.command("trade", async (ctx) => {
 
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    const [quote, news, avSentiment] = await Promise.all([
+    const isForex = symbol.includes("=X");
+    const isCrypto = symbol.includes("-USD");
+    const isCommodity = ["GC=F", "SI=F", "CL=F", "NG=F"].includes(symbol);
+
+    const [quote, news, avSentiment, rsi, bb, forexData, commodityPrice, goldSilver] = await Promise.all([
       getQuote(symbol),
       getNews(raw, 4),
       alpha.getNewsSentiment({ topics: ["commodities", "forex", "financial_markets"], limit: 4 }),
+      alpha.getRSI(symbol).catch(() => null),
+      alpha.getBBANDS(symbol).catch(() => null),
+      isForex ? alpha.getForexDaily(symbol.replace("=X", "").slice(0, 3), symbol.replace("=X", "").slice(3)).catch(() => null) : null,
+      isCommodity && !["GC=F", "SI=F"].includes(symbol) ? alpha.getCommodity({ "CL=F": "WTI", "NG=F": "NATURAL_GAS" }[symbol]).catch(() => null) : null,
+      isCommodity && ["GC=F", "SI=F"].includes(symbol) ? alpha.getGoldSilverSpot().catch(() => null) : null,
     ]);
 
     if (!quote) return ctx.reply(`Data untuk "${raw}" tidak ditemukan. Coba kode yang benar.`);
 
-    const marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
+    let marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
+    if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
+    if (bb) marketCtx += "\n" + alpha.formatTechnicals(bb, "Bollinger Bands");
+    if (forexData) marketCtx += "\n" + alpha.formatForex(forexData, symbol.replace("=X", ""));
+    if (commodityPrice) marketCtx += "\n" + alpha.formatCommodityPrice(commodityPrice, symbol === "CL=F" ? "Minyak Mentah (WTI)" : "Natural Gas");
+    if (goldSilver) marketCtx += "\n" + alpha.formatGoldSilver(goldSilver);
     const messages = [
       {
         role: "system",
@@ -374,20 +397,34 @@ bot.command("ekonomi", async (ctx) => {
   try {
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
-    const [news, cpi, fedRate, inflation] = await Promise.all([
+    const [news, cpi, fedRate, inflation, gdp, unemployment, treasury, retail, wti, goldSilver, topMovers] = await Promise.all([
       getMarketNews(6),
       alpha.getCPI(),
       alpha.getFedRate(),
       alpha.getInflation(),
+      alpha.getGDP().catch(() => null),
+      alpha.getUnemployment().catch(() => null),
+      alpha.getTreasuryYield().catch(() => null),
+      alpha.getRetailSales().catch(() => null),
+      alpha.getWTI().catch(() => null),
+      alpha.getGoldSilverSpot().catch(() => null),
+      alpha.getTopGainersLosers().catch(() => null),
     ]);
 
     let ecoCtx = "";
     if (news.length) {
       ecoCtx = "Berita terkini:\n" + news.map((n, i) => `${i + 1}. ${n.title}`).join("\n");
     }
-    ecoCtx += alpha.formatIndicator(cpi, "CPI (Inflasi) 3 bulan terakhir");
-    ecoCtx += alpha.formatIndicator(fedRate, "Fed Funds Rate 3 bulan terakhir");
-    ecoCtx += alpha.formatIndicator(inflation, "Inflasi 3 tahun terakhir");
+    ecoCtx += alpha.formatIndicator(cpi, "CPI (Inflasi Konsumen)");
+    ecoCtx += alpha.formatIndicator(fedRate, "Fed Funds Rate");
+    ecoCtx += alpha.formatIndicator(inflation, "Inflasi (CPI) Tahunan");
+    if (gdp) ecoCtx += alpha.formatIndicator(gdp, "GDP Riil");
+    if (unemployment) ecoCtx += alpha.formatIndicator(unemployment, "Tingkat Pengangguran");
+    if (treasury) ecoCtx += alpha.formatIndicator(treasury, "Treasury Yield");
+    if (retail) ecoCtx += alpha.formatIndicator(retail, "Retail Sales");
+    if (wti) ecoCtx += alpha.formatCommodityPrice(wti, "Minyak Mentah (WTI)");
+    if (goldSilver) ecoCtx += alpha.formatGoldSilver(goldSilver);
+    if (topMovers) ecoCtx += alpha.formatTopGainers(topMovers);
 
     if (!ecoCtx.trim()) return ctx.reply("Belum ada data ekonomi terkini.");
 
@@ -569,25 +606,38 @@ bot.on("text", async (ctx) => {
     const knowledgeContext = await getKnowledgeContext(ctx.from.id);
 
     let marketCtx = "";
+    const lowerMsg = userMessage.toLowerCase();
     const detectedSymbol = detectSymbol(userMessage);
     if (detectedSymbol) {
-      const [q, n, av] = await Promise.all([
+      const [q, n, av, rsi] = await Promise.all([
         getQuote(detectedSymbol),
         getNews(detectedSymbol, 3),
         alpha.getNewsSentiment({ tickers: [detectedSymbol], limit: 3 }),
+        alpha.getRSI(detectedSymbol).catch(() => null),
       ]);
-      if (q) marketCtx = buildMarketContext(q, n) + alpha.formatSentiment(av);
+      if (q) {
+        marketCtx = buildMarketContext(q, n) + alpha.formatSentiment(av);
+        if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
+      }
     } else {
-      const marketWords = ["saham", "forex", "komoditas", "cpi", "ppi", "inflasi", "suku bunga", "trading", "analisa", "berita ekonomi", "emas", "minyak", "xauusd", "btc", "bitcoin", "eurusd", "ihsg"];
-      if (marketWords.some(w => userMessage.toLowerCase().includes(w))) {
-        const [macroNews, avMacro] = await Promise.all([
+      const marketWords = ["saham", "forex", "komoditas", "cpi", "ppi", "inflasi", "suku bunga", "trading", "analisa", "berita ekonomi", "emas", "minyak", "xauusd", "btc", "bitcoin", "eurusd", "ihsg", "ekonomi", "pasar"];
+      if (marketWords.some(w => lowerMsg.includes(w))) {
+        const [macroNews, avMacro, cpi, fedRate, goldSilver, wti] = await Promise.all([
           getMarketNews(3),
           alpha.getNewsSentiment({ topics: ["economy", "financial_markets"], limit: 3 }),
+          lowerMsg.includes("cpi") || lowerMsg.includes("inflasi") ? alpha.getCPI().catch(() => null) : null,
+          lowerMsg.includes("suku bunga") || lowerMsg.includes("fed") ? alpha.getFedRate().catch(() => null) : null,
+          lowerMsg.includes("emas") || lowerMsg.includes("gold") || lowerMsg.includes("silver") ? alpha.getGoldSilverSpot().catch(() => null) : null,
+          lowerMsg.includes("minyak") || lowerMsg.includes("wti") || lowerMsg.includes("crude") ? alpha.getWTI().catch(() => null) : null,
         ]);
         if (macroNews.length) {
           marketCtx = "\n--- Berita Ekonomi Terkini ---\n" + macroNews.map(n => `- ${n.title}`).join("\n");
         }
         marketCtx += alpha.formatSentiment(avMacro);
+        if (cpi) marketCtx += alpha.formatIndicator(cpi, "CPI");
+        if (fedRate) marketCtx += alpha.formatIndicator(fedRate, "Fed Rate");
+        if (goldSilver) marketCtx += alpha.formatGoldSilver(goldSilver);
+        if (wti) marketCtx += alpha.formatCommodityPrice(wti, "Minyak Mentah (WTI)");
       }
     }
 

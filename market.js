@@ -29,6 +29,22 @@ const SYMBOL_MAP = {
   nikkei: "^N225",
   hang: "^HSI",
   hsbi: "^HSI",
+  gas: "NG=F",
+  natural: "NG=F",
+  tembaga: "HG=F",
+  copper: "HG=F",
+  wheat: "ZW=F",
+  gandum: "ZW=F",
+  corn: "ZC=F",
+  jagung: "ZC=F",
+  coffee: "KC=F",
+  kopi: "KC=F",
+  sugar: "SB=F",
+  gula: "SB=F",
+  cotton: "CT=F",
+  kapas: "CT=F",
+  paladium: "PA=F",
+  platinum: "PL=F",
 };
 
 export function detectSymbol(text) {
