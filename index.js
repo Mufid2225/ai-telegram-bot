@@ -6,11 +6,17 @@ import dayjs from "dayjs";
 import { getKnowledgeContext } from "./memory.js";
 import { detectSymbol, getQuote, getNews, getMarketNews, buildMarketContext } from "./market.js";
 import * as alpha from "./alpha.js";
+import * as fmp from "./fmp.js";
+import { webSearch, detectSearchNeeded, buildSearchQuery } from "./search.js";
 import Tesseract from "tesseract.js";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
 
 dotenv.config();
+
+const months = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+const today = new Date();
+const dateStr = today.getDate() + " " + months[today.getMonth()] + " " + today.getFullYear();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -248,14 +254,59 @@ bot.command("test", async (ctx) => {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.ROUTER_API_KEY}` },
       body: JSON.stringify({ model: process.env.ROUTER_MODEL, messages: [{ role: "user", content: "hai" }], stream: false }),
     });
-    if (resp.status === 429) {
-      await ctx.reply("Rate limit kena, coba 5 detik lagi.");
+    if (resp.status === 429 || resp.status === 503) {
+      const text = await resp.text();
+      await ctx.reply(`API sibuk (${resp.status}): ${text.slice(0, 100)}`);
       return;
     }
     const text = await resp.text();
     await ctx.reply(`Status: ${resp.status}\nResponse: ${text.slice(0, 200)}`);
   } catch (e) {
     await ctx.reply(`Fetch error: ${e.cause || e.code || e.message}`);
+  }
+});
+
+// ── Web Search Command ──────────────────────────────
+
+bot.command("cari", async (ctx) => {
+  try {
+    const args = ctx.message.text.split(" ");
+    const rawQuery = args.slice(1).join(" ");
+    if (!rawQuery) return ctx.reply("Contoh: /cari IPO terbaru Indonesia 2026");
+
+    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+    const searchQuery = buildSearchQuery(rawQuery);
+    const searchResult = await webSearch(searchQuery, 8);
+    console.log(`[/cari] "${rawQuery}" → "${searchQuery}" → ${searchResult ? "OK" : "NULL"}`);
+    if (!searchResult) {
+      return ctx.reply("Gagal dapetin info. Coba langsung buka idx.co.id atau eipo.ksei.co.id.");
+    }
+
+    const messages = [
+      {
+        role: "system",
+        content: `
+Kamu asisten yang santai dan helpful.
+
+Gaya bicara:
+- Natural, santai, kayak ngobrol
+- JANGAN pakai emoji
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
+- JANGAN ngarang informasi
+
+Hari ini: ${dateStr}.
+
+Informasi terkini:
+${searchResult}`,
+      },
+      { role: "user", content: query },
+    ];
+
+    const reply = await callAI(messages, ctx);
+    await ctx.reply(reply);
+  } catch (error) {
+    console.error("/cari error:", error);
+    await ctx.reply(`Gagal mencari: ${error.message}`);
   }
 });
 
@@ -276,11 +327,12 @@ bot.command("saham", async (ctx) => {
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
     const ticker = symbol.replace(".JK", "").replace("=F", "").replace("=X", "").replace("-USD", "");
-    const [quote, news, avSentiment, fundamental, earnings, rsi, topMovers] = await Promise.all([
+    const [quote, news, avSentiment, fundamental, ratios, earnings, rsi, topMovers] = await Promise.all([
       getQuote(symbol),
       getNews(symbol, 4),
       alpha.getNewsSentiment({ tickers: [ticker], limit: 4 }),
-      alpha.getCompanyOverview(ticker).catch(() => null),
+      fmp.getProfile(ticker).catch(() => null),
+      fmp.getFinancialRatios(ticker).catch(() => null),
       alpha.getEarnings(ticker).catch(() => null),
       alpha.getRSI(ticker).catch(() => null),
       alpha.getTopGainersLosers().catch(() => null),
@@ -289,7 +341,7 @@ bot.command("saham", async (ctx) => {
     if (!quote) return ctx.reply(`Data saham "${raw}" tidak ditemukan. Coba kode yang benar (contoh: BBCA.JK, AAPL).`);
 
     let marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
-    if (fundamental) marketCtx += "\n" + alpha.formatFundamentals(fundamental);
+    if (fundamental || ratios) marketCtx += "\n" + fmp.formatFundamentals(fundamental, ratios);
     if (earnings) marketCtx += "\n" + alpha.formatEarnings(earnings);
     if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
     if (topMovers) marketCtx += "\n" + alpha.formatTopGainers(topMovers);
@@ -302,7 +354,9 @@ Kamu analis saham profesional.
 Gaya bicara:
 - Natural, santai, kayak ngobrol
 - JANGAN pakai emoji
-- Ga usah pake markdown atau **
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
+- JANGAN ngarang tanggal.
+- Hari ini: ${dateStr}.
 
 Tugas:
 Analisa saham ${quote.name} (${quote.symbol}) berdasarkan data real-time.
@@ -372,7 +426,9 @@ Kamu analis trading profesional.
 Gaya bicara:
 - Natural, santai, kayak ngobrol
 - JANGAN pakai emoji
-- Ga usah pake markdown atau **
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
+- JANGAN ngarang tanggal.
+- Hari ini: ${dateStr}.
 
 Tugas:
 Analisa ${quote.name} (${quote.symbol}) berdasarkan data real-time.
@@ -437,7 +493,8 @@ Kamu analis ekonomi.
 Gaya bicara:
 - Natural, santai, kayak ngobrol
 - JANGAN pakai emoji
-- Ga usah pake markdown atau **
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
+- JANGAN ngarang tanggal/tahun kalo gak ada di data.
 
 Tugas:
 Rangkum data ekonomi terkini, kaitkan dengan dampaknya ke pasar saham, komoditas, dan forex.
@@ -492,7 +549,7 @@ Kamu asisten Telegram yang santai dan helpful.
 Gaya bicara:
 - Natural, kayak ngobrol sama temen
 - JANGAN pakai emoji sama sekali
-- Ga usah pake ** atau markdown apapun
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
 - Ga usah kaku, santai aja
 
 User baru kirim foto. Ini hasil OCR-nya. Bantu user.`,
@@ -508,6 +565,10 @@ User baru kirim foto. Ini hasil OCR-nya. Bantu user.`,
     await ctx.reply(`Gagal proses foto: ${error.message}`);
   }
 });
+
+function stripMarkdown(text) {
+  return text.replace(/\*{1,2}([^*]*)\*{1,2}/g, "$1").replace(/`{1,3}([^`]*)`{1,3}/g, "$1");
+}
 
 async function callAI(messages, ctx) {
   for (let retry = 0; retry < 3; retry++) {
@@ -526,8 +587,8 @@ async function callAI(messages, ctx) {
       }),
     });
 
-    if (resp.status === 429 && retry < 2) {
-      await new Promise(r => setTimeout(r, 2000 * (retry + 1)));
+    if ((resp.status === 429 || resp.status === 503) && retry < 2) {
+      await new Promise(r => setTimeout(r, 3000 * (retry + 1)));
       continue;
     }
 
@@ -554,7 +615,7 @@ async function callAI(messages, ctx) {
           } catch {}
         }
       }
-      if (content) return content;
+      if (content) return stripMarkdown(content);
       return "Maaf, respon AI kosong.";
     }
 
@@ -562,7 +623,7 @@ async function callAI(messages, ctx) {
     if (!choice) return "Maaf, respon AI kosong.";
 
     const content = choice.message.content;
-    if (content && content.trim()) return content;
+    if (content && content.trim()) return stripMarkdown(content);
     return "Maaf, respon AI kosong.";
   }
   return "AI sibuk, coba lagi nanti.";
@@ -609,15 +670,18 @@ bot.on("text", async (ctx) => {
     const lowerMsg = userMessage.toLowerCase();
     const detectedSymbol = detectSymbol(userMessage);
     if (detectedSymbol) {
-      const [q, n, av, rsi] = await Promise.all([
+      const [q, n, av, rsi, profile, ratios] = await Promise.all([
         getQuote(detectedSymbol),
         getNews(detectedSymbol, 3),
         alpha.getNewsSentiment({ tickers: [detectedSymbol], limit: 3 }),
         alpha.getRSI(detectedSymbol).catch(() => null),
+        fmp.getProfile(detectedSymbol).catch(() => null),
+        fmp.getFinancialRatios(detectedSymbol).catch(() => null),
       ]);
       if (q) {
         marketCtx = buildMarketContext(q, n) + alpha.formatSentiment(av);
         if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
+        if (profile || ratios) marketCtx += "\n" + fmp.formatFundamentals(profile, ratios);
       }
     } else {
       const marketWords = ["saham", "forex", "komoditas", "cpi", "ppi", "inflasi", "suku bunga", "trading", "analisa", "berita ekonomi", "emas", "minyak", "xauusd", "btc", "bitcoin", "eurusd", "ihsg", "ekonomi", "pasar"];
@@ -641,6 +705,35 @@ bot.on("text", async (ctx) => {
       }
     }
 
+    let searchCtx = "";
+    let skipAI = false;
+    if (detectSearchNeeded(userMessage)) {
+      await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+      const searchQuery = buildSearchQuery(userMessage);
+      const searchResult = await webSearch(searchQuery, 8);
+      console.log(`[SEARCH] "${userMessage}" → "${searchQuery}" → ${searchResult ? "OK" : "NULL"}`);
+      if (searchResult) {
+        searchCtx = `\nInformasi terkini:\n${searchResult.trim()}`;
+      } else {
+        skipAI = true;
+      }
+    }
+
+    if (skipAI) {
+      const reply = `Maaf, saya belum bisa dapetin info real-time soal itu.
+
+Cara paling cepet dapetin data IPO / berita terbaru:
+
+1. Buka idx.co.id -> Listing -> IPO Calendar / New Listing
+2. Cek e-IPO KSEI: eipo.ksei.co.id
+3. Buka app sekuritas (Bibit, Stockbit, Ajaib, IPOT) -> menu IPO
+4. Search di Google: "IPO Indonesia 2026" atau "jadwal IPO BEI"
+
+Kalo udah nemu kode sahamnya (misal: JELI, RANS), kirim ke sini pake /saham JELI atau /saham RANS.JK, nanti saya analisa.`;
+      await ctx.reply(reply);
+      return;
+    }
+
     const messages = [
       {
         role: "system",
@@ -650,10 +743,16 @@ Kamu asisten Telegram yang santai dan helpful.
 Gaya bicara:
 - Natural, kayak ngobrol sama temen
 - JANGAN pakai emoji sama sekali
-- Ga usah pake ** atau markdown apapun
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
 - Ga usah kaku, santai aja
 - Tetep informatif tapi mengalir
 - Kalo perlu list, pake tanda - aja
+
+Hari ini: ${dateStr}.
+
+Aturan penting:
+- Kalo ditanya tanggal, jawab pake info hari ini di atas.
+- JANGAN ngarang tanggal/tahun kalo gak yakin.
 
 Kemampuan:
 - Bantu tugas, deadline, jadwal sekolah
@@ -664,7 +763,8 @@ Kemampuan:
 Memory dari tugas/catatan:
 ${memoryContext}
 ${knowledgeContext}
-${marketCtx}`,
+${marketCtx}
+${searchCtx}`,
       },
       ...conversations,
       { role: "user", content: userMessage },
@@ -727,7 +827,7 @@ Kamu asisten Telegram yang santai dan helpful.
 Gaya bicara:
 - Natural, kayak ngobrol sama temen
 - JANGAN pakai emoji sama sekali
-- Ga usah pake ** atau markdown apapun
+- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
 - Ga usah kaku, santai aja
 
 User kirim file. Ini isinya. Bantu user.`,
