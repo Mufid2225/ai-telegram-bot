@@ -7,6 +7,7 @@ import { getKnowledgeContext } from "./memory.js";
 import { detectSymbol, getQuote, getNews, getMarketNews, buildMarketContext } from "./market.js";
 import * as alpha from "./alpha.js";
 import * as fmp from "./fmp.js";
+import { getHistory, getChartUrl, getPeriodLabel } from "./chart.js";
 import { webSearch, detectSearchNeeded, buildSearchQuery } from "./search.js";
 import Tesseract from "tesseract.js";
 import pdf from "pdf-parse";
@@ -327,7 +328,7 @@ bot.command("saham", async (ctx) => {
     await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
 
     const ticker = symbol.replace(".JK", "").replace("=F", "").replace("=X", "").replace("-USD", "");
-    const [quote, news, avSentiment, fundamental, ratios, earnings, rsi, topMovers] = await Promise.all([
+    const [quote, news, avSentiment, fundamental, ratios, earnings, rsi, topMovers, history] = await Promise.all([
       getQuote(symbol),
       getNews(symbol, 4),
       alpha.getNewsSentiment({ tickers: [ticker], limit: 4 }),
@@ -336,9 +337,18 @@ bot.command("saham", async (ctx) => {
       alpha.getEarnings(ticker).catch(() => null),
       alpha.getRSI(ticker).catch(() => null),
       alpha.getTopGainersLosers().catch(() => null),
+      getHistory(symbol, "1m").catch(() => null),
     ]);
 
     if (!quote) return ctx.reply(`Data saham "${raw}" tidak ditemukan. Coba kode yang benar (contoh: BBCA.JK, AAPL).`);
+
+    if (history && history.length >= 2) {
+      const chartUrl = await getChartUrl(`${quote.symbol} (${getPeriodLabel("1m")})`, history, "1m", "line", "dark");
+      if (chartUrl) {
+        await ctx.telegram.sendChatAction(ctx.chat.id, "upload_photo");
+        ctx.replyWithPhoto(chartUrl, { caption: `Chart ${quote.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
+      }
+    }
 
     let marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
     if (fundamental || ratios) marketCtx += "\n" + fmp.formatFundamentals(fundamental, ratios);
@@ -398,7 +408,7 @@ bot.command("trade", async (ctx) => {
     const isCrypto = symbol.includes("-USD");
     const isCommodity = ["GC=F", "SI=F", "CL=F", "NG=F"].includes(symbol);
 
-    const [quote, news, avSentiment, rsi, bb, forexData, commodityPrice, goldSilver] = await Promise.all([
+    const [quote, news, avSentiment, rsi, bb, forexData, commodityPrice, goldSilver, history] = await Promise.all([
       getQuote(symbol),
       getNews(raw, 4),
       alpha.getNewsSentiment({ topics: ["commodities", "forex", "financial_markets"], limit: 4 }),
@@ -407,9 +417,18 @@ bot.command("trade", async (ctx) => {
       isForex ? alpha.getForexDaily(symbol.replace("=X", "").slice(0, 3), symbol.replace("=X", "").slice(3)).catch(() => null) : null,
       isCommodity && !["GC=F", "SI=F"].includes(symbol) ? alpha.getCommodity({ "CL=F": "WTI", "NG=F": "NATURAL_GAS" }[symbol]).catch(() => null) : null,
       isCommodity && ["GC=F", "SI=F"].includes(symbol) ? alpha.getGoldSilverSpot().catch(() => null) : null,
+      getHistory(symbol, "1m").catch(() => null),
     ]);
 
     if (!quote) return ctx.reply(`Data untuk "${raw}" tidak ditemukan. Coba kode yang benar.`);
+
+    if (history && history.length >= 2) {
+      const chartUrl = await getChartUrl(`${quote.symbol} (${getPeriodLabel("1m")})`, history, "1m", "line", "dark");
+      if (chartUrl) {
+        await ctx.telegram.sendChatAction(ctx.chat.id, "upload_photo");
+        ctx.replyWithPhoto(chartUrl, { caption: `Chart ${quote.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
+      }
+    }
 
     let marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
     if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
@@ -670,18 +689,25 @@ bot.on("text", async (ctx) => {
     const lowerMsg = userMessage.toLowerCase();
     const detectedSymbol = detectSymbol(userMessage);
     if (detectedSymbol) {
-      const [q, n, av, rsi, profile, ratios] = await Promise.all([
+      const [q, n, av, rsi, profile, ratios, history] = await Promise.all([
         getQuote(detectedSymbol),
         getNews(detectedSymbol, 3),
         alpha.getNewsSentiment({ tickers: [detectedSymbol], limit: 3 }),
         alpha.getRSI(detectedSymbol).catch(() => null),
         fmp.getProfile(detectedSymbol).catch(() => null),
         fmp.getFinancialRatios(detectedSymbol).catch(() => null),
+        getHistory(detectedSymbol, "1m").catch(() => null),
       ]);
       if (q) {
         marketCtx = buildMarketContext(q, n) + alpha.formatSentiment(av);
         if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
         if (profile || ratios) marketCtx += "\n" + fmp.formatFundamentals(profile, ratios);
+        if (history && history.length >= 2) {
+          const chartUrl = await getChartUrl(`${q.symbol} (${getPeriodLabel("1m")})`, history, "1m", "line", "dark");
+          if (chartUrl) {
+            ctx.replyWithPhoto(chartUrl, { caption: `Chart ${q.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
+          }
+        }
       }
     } else {
       const marketWords = ["saham", "forex", "komoditas", "cpi", "ppi", "inflasi", "suku bunga", "trading", "analisa", "berita ekonomi", "emas", "minyak", "xauusd", "btc", "bitcoin", "eurusd", "ihsg", "ekonomi", "pasar"];
