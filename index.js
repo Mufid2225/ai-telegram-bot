@@ -7,7 +7,7 @@ import { getKnowledgeContext } from "./memory.js";
 import { detectSymbol, getQuote, getNews, getMarketNews, buildMarketContext } from "./market.js";
 import * as alpha from "./alpha.js";
 import * as fmp from "./fmp.js";
-import { getHistory, getChartUrl, getPeriodLabel } from "./chart.js";
+import { getHistory, getChartImage, getPeriodLabel } from "./chart.js";
 import { webSearch, detectSearchNeeded, buildSearchQuery } from "./search.js";
 import Tesseract from "tesseract.js";
 import pdf from "pdf-parse";
@@ -343,90 +343,10 @@ bot.command("saham", async (ctx) => {
     if (!quote) return ctx.reply(`Data saham "${raw}" tidak ditemukan. Coba kode yang benar (contoh: BBCA.JK, AAPL).`);
 
     if (history && history.length >= 2) {
-      const chartUrl = await getChartUrl(`${quote.symbol} (${getPeriodLabel("1m")})`, history, "1m", "line", "dark");
-      if (chartUrl) {
+      const chartBuf = await getChartImage(quote.symbol, history, "1m", "dark");
+      if (chartBuf) {
         await ctx.telegram.sendChatAction(ctx.chat.id, "upload_photo");
-        ctx.replyWithPhoto(chartUrl, { caption: `Chart ${quote.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
-      }
-    }
-
-    let marketCtx = buildMarketContext(quote, news) + alpha.formatSentiment(avSentiment);
-    if (fundamental || ratios) marketCtx += "\n" + fmp.formatFundamentals(fundamental, ratios);
-    if (earnings) marketCtx += "\n" + alpha.formatEarnings(earnings);
-    if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
-    if (topMovers) marketCtx += "\n" + alpha.formatTopGainers(topMovers);
-    const messages = [
-      {
-        role: "system",
-        content: `
-Kamu analis saham profesional.
-
-Gaya bicara:
-- Natural, santai, kayak ngobrol
-- JANGAN pakai emoji
-- JANGAN gunakan ** atau * atau apapun untuk formatting teks. Tulis polos tanpa markdown.
-- JANGAN ngarang tanggal.
-- Hari ini: ${dateStr}.
-
-Tugas:
-Analisa saham ${quote.name} (${quote.symbol}) berdasarkan data real-time.
-Berikan pendapat apakah saham ini menarik, potensi risikonya, dan sentimen dari berita terbaru.
-${marketCtx}`,
-      },
-      {
-        role: "user",
-        content: `Analisa saham ${quote.symbol} (${quote.name}) untuk hari ini.`,
-      },
-    ];
-
-    const reply = await callAI(messages, ctx);
-    await ctx.reply(reply);
-  } catch (error) {
-    console.error("/saham error:", error);
-    await ctx.reply(`Gagal analisa saham: ${error.message}`);
-  }
-});
-
-bot.command("trade", async (ctx) => {
-  try {
-    const args = ctx.message.text.split(" ");
-    const raw = args.slice(1).join(" ");
-    if (!raw) return ctx.reply("Contoh: /trade XAUUSD, /trade EURUSD, /trade BTC");
-
-    let symbol = detectSymbol(raw);
-    if (!symbol) {
-      const upper = raw.toUpperCase();
-      if (["GC","SI","CL","NG"].includes(upper)) symbol = `${upper}=F`;
-      else if (["XAUUSD","XAGUSD","EURUSD","GBPUSD","USDJPY","USDCAD","AUDUSD","NZDUSD"].includes(upper)) symbol = `${upper}=X`;
-      else if (["BTC","ETH"].includes(upper)) symbol = `${upper}-USD`;
-      else symbol = raw;
-    }
-
-    await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
-
-    const isForex = symbol.includes("=X");
-    const isCrypto = symbol.includes("-USD");
-    const isCommodity = ["GC=F", "SI=F", "CL=F", "NG=F"].includes(symbol);
-
-    const [quote, news, avSentiment, rsi, bb, forexData, commodityPrice, goldSilver, history] = await Promise.all([
-      getQuote(symbol),
-      getNews(raw, 4),
-      alpha.getNewsSentiment({ topics: ["commodities", "forex", "financial_markets"], limit: 4 }),
-      alpha.getRSI(symbol).catch(() => null),
-      alpha.getBBANDS(symbol).catch(() => null),
-      isForex ? alpha.getForexDaily(symbol.replace("=X", "").slice(0, 3), symbol.replace("=X", "").slice(3)).catch(() => null) : null,
-      isCommodity && !["GC=F", "SI=F"].includes(symbol) ? alpha.getCommodity({ "CL=F": "WTI", "NG=F": "NATURAL_GAS" }[symbol]).catch(() => null) : null,
-      isCommodity && ["GC=F", "SI=F"].includes(symbol) ? alpha.getGoldSilverSpot().catch(() => null) : null,
-      getHistory(symbol, "1m").catch(() => null),
-    ]);
-
-    if (!quote) return ctx.reply(`Data untuk "${raw}" tidak ditemukan. Coba kode yang benar.`);
-
-    if (history && history.length >= 2) {
-      const chartUrl = await getChartUrl(`${quote.symbol} (${getPeriodLabel("1m")})`, history, "1m", "line", "dark");
-      if (chartUrl) {
-        await ctx.telegram.sendChatAction(ctx.chat.id, "upload_photo");
-        ctx.replyWithPhoto(chartUrl, { caption: `Chart ${quote.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
+        ctx.replyWithPhoto({ source: chartBuf }, { caption: `Chart ${quote.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
       }
     }
 
@@ -450,7 +370,8 @@ Gaya bicara:
 - Hari ini: ${dateStr}.
 
 Tugas:
-Analisa ${quote.name} (${quote.symbol}) berdasarkan data real-time.
+Analisa ${quote.name} (${quote.symbol}) berdasarkan DATA REAL-TIME di bawah.
+JANGAN bilang tidak punya akses data real-time — data ini dari Yahoo Finance langsung.
 Berikan pandangan teknikal singkat, sentimen pasar, dan level penting (support/resistance).
 ${marketCtx}`,
       },
@@ -703,7 +624,7 @@ bot.on("text", async (ctx) => {
         if (rsi) marketCtx += "\n" + alpha.formatTechnicals(rsi, "RSI (14)");
         if (profile || ratios) marketCtx += "\n" + fmp.formatFundamentals(profile, ratios);
         if (history && history.length >= 2) {
-          const chartUrl = await getChartUrl(`${q.symbol} (${getPeriodLabel("1m")})`, history, "1m", "line", "dark");
+          const chartUrl = await getChartImage(q.symbol, history, "1m", "dark");
           if (chartUrl) {
             ctx.replyWithPhoto(chartUrl, { caption: `Chart ${q.symbol} - ${getPeriodLabel("1m")}` }).catch(() => {});
           }

@@ -1,7 +1,6 @@
 import YahooFinance from "yahoo-finance2";
 
 const yf = new YahooFinance({ suppressNotices: ["ripHistorical"] });
-const QC_BASE = "https://quickchart.io/chart";
 
 const DAYS_MAP = {
   "1w": 7, "2w": 14, "1m": 30, "3m": 90, "6m": 180, "1y": 365,
@@ -25,148 +24,128 @@ export async function getHistory(symbol, period = "1m") {
   }
 }
 
-function buildCandlestickChart(symbol, data, period, theme) {
-  const isDark = theme === "dark";
-  const textColor = isDark ? "#d1d5db" : "#374151";
-  const gridColor = isDark ? "#374151" : "#e5e7eb";
-  const bgColor = isDark ? "#1f2937" : "#ffffff";
-
-  const ohlc = data.map(d => ({
-    x: d.date.toISOString().slice(0, 10),
-    o: d.open,
-    h: d.high,
-    l: d.low,
-    c: d.close,
-  }));
-
-  const dates = ohlc.map(d => d.x);
-  const closes = ohlc.map(d => d.c);
-  const minPrice = Math.min(...ohlc.map(d => d.l)) * 0.995;
-  const maxPrice = Math.max(...ohlc.map(d => d.h)) * 1.005;
-  const vol = data.map(d => d.volume || 0);
-  const maxVol = Math.max(...vol) || 1;
-
-  const config = {
-    type: "candlestick",
-    data: {
-      datasets: [{
-        label: symbol,
-        data: ohlc,
-        color: {
-          up: "#22c55e",
-          down: "#ef4444",
-          unchanged: "#9ca3af",
-        },
-        borderColor: {
-          up: "#22c55e",
-          down: "#ef4444",
-          unchanged: "#9ca3af",
-        },
-      }],
-    },
-    options: {
-      responsive: true,
-      backgroundColor: bgColor,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: isDark ? "#374151" : "#fff",
-          titleColor: textColor,
-          bodyColor: textColor,
-          borderColor: gridColor,
-          borderWidth: 1,
-          callbacks: {
-            label: ctx => {
-              const d = ctx.raw;
-              return `O: ${d.o}  H: ${d.h}  L: ${d.l}  C: ${d.c}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          type: "time",
-          time: { unit: "day", displayFormats: { day: "dd MMM" } },
-          ticks: { color: textColor, maxTicksLimit: 8 },
-          grid: { color: gridColor },
-        },
-        y: {
-          position: "right",
-          ticks: { color: textColor },
-          grid: { color: gridColor },
-          min: minPrice,
-          max: maxPrice,
-        },
-      },
-    },
-  };
-
-  const url = `${QC_BASE}?width=700&height=400&backgroundColor=${isDark ? "dark" : "white"}&c=${encodeURIComponent(JSON.stringify(config))}`;
-  return url;
+function sma(data, period) {
+  const result = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) { result.push(null); continue; }
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += data[j];
+    result.push(sum / period);
+  }
+  return result;
 }
 
-function buildLineChart(symbol, data, period, theme) {
-  const isDark = theme === "dark";
-  const textColor = isDark ? "#d1d5db" : "#374151";
-  const gridColor = isDark ? "#374151" : "#e5e7eb";
-  const bgColor = isDark ? "#1f2937" : "#ffffff";
+export async function getChartImage(symbol, data, period = "1m", theme = "dark") {
+  if (!data || data.length < 2) return null;
 
-  const dates = data.map(d => d.date.toISOString().slice(0, 10));
+  const isDark = theme === "dark";
+  const txt = isDark ? "#d1d5db" : "#374151";
+  const grid = isDark ? "#2d3748" : "#e5e7eb";
+
+  const labels = data.map(d => {
+    const dt = d.date;
+    if (typeof dt === 'object' && dt.toISOString) return dt.toISOString().slice(5, 10);
+    return String(dt).slice(5, 10);
+  });
   const closes = data.map(d => d.close);
 
   const first = closes[0];
   const last = closes[closes.length - 1];
-  const isUp = last >= first;
-  const lineColor = isUp ? "#22c55e" : "#ef4444";
+  const chg = ((last - first) / first * 100);
+  const up = last >= first;
+  const pc = up ? "#22c55e" : "#ef4444";
 
-  const config = {
+  const sma5 = sma(closes, 5);
+  const sma20 = sma(closes, 20);
+  const minP = Math.min(...closes) * 0.99;
+  const maxP = Math.max(...closes) * 1.01;
+
+  const chartData = {
     type: "line",
     data: {
-      labels: dates,
+      labels,
       datasets: [
         {
-          label: symbol,
+          label: `${symbol}`,
           data: closes,
-          borderColor: lineColor,
-          backgroundColor: lineColor + "20",
-          borderWidth: 2,
-          pointRadius: 2,
-          pointHoverRadius: 5,
+          borderColor: pc,
+          backgroundColor: pc + "18",
+          borderWidth: 2.5,
+          pointRadius: 0,
           fill: true,
+          tension: 0.1,
+        },
+        {
+          label: "MA5",
+          data: sma5,
+          borderColor: "#f59e0b",
+          borderWidth: 1.5,
+          borderDash: [6, 3],
+          pointRadius: 0,
+          tension: 0.1,
+        },
+        {
+          label: "MA20",
+          data: sma20,
+          borderColor: "#3b82f6",
+          borderWidth: 1.5,
+          borderDash: [4, 4],
+          pointRadius: 0,
           tension: 0.1,
         },
       ],
     },
     options: {
       responsive: true,
-      backgroundColor: bgColor,
       plugins: {
-        legend: { display: false },
+        legend: {
+          position: "top",
+          align: "end",
+          labels: { color: txt, boxWidth: 12, padding: 6, font: { size: 10 }, usePointStyle: true, pointStyle: "line" },
+        },
+        title: {
+          display: true,
+          text: `${symbol}  ${period}  ${up ? "+" : ""}${chg.toFixed(2)}%  |  ${last.toFixed(0)}`,
+          color: txt,
+          font: { size: 13, weight: "bold" },
+          padding: { top: 6, bottom: 2 },
+        },
       },
       scales: {
         x: {
-          ticks: { color: textColor, maxTicksLimit: 8 },
-          grid: { color: gridColor },
+          ticks: { color: txt, maxTicksLimit: 6, font: { size: 9 } },
+          grid: { color: grid, drawBorder: false },
         },
         y: {
           position: "right",
-          ticks: { color: textColor },
-          grid: { color: gridColor },
+          ticks: { color: txt, font: { size: 9 }, maxTicksLimit: 5 },
+          grid: { color: grid, drawBorder: false },
+          min: minP,
+          max: maxP,
         },
       },
     },
   };
 
-  const url = `${QC_BASE}?width=700&height=350&backgroundColor=${isDark ? "dark" : "white"}&c=${encodeURIComponent(JSON.stringify(config))}`;
-  return url;
-}
-
-export async function getChartUrl(symbol, data, period = "1m", type = "line", theme = "dark") {
-  if (!data || data.length < 2) return null;
-  if (type === "candle") {
-    return buildCandlestickChart(symbol, data, period, theme);
+  try {
+    const resp = await fetch("https://quickchart.io/chart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        width: 800,
+        height: 420,
+        devicePixelRatio: 2,
+        backgroundColor: isDark ? "dark" : "white",
+        chart: chartData,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) return null;
+    const raw = await resp.arrayBuffer();
+    return Buffer.from(new Uint8Array(raw));
+  } catch {
+    return null;
   }
-  return buildLineChart(symbol, data, period, theme);
 }
 
 export function getPeriodLabel(period) {
