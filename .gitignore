@@ -1,6 +1,30 @@
+# Dependencies
 node_modules/
+
+# Local environment files (keep the template)
 .env
+.env.*
+!.env.example
+
+# Local SQLite data
 memory.db
 data.db*
 *.db-shm
 *.db-wal
+
+# Generated test charts
+test-chart*.png
+
+# Logs, caches, coverage, and temporary output
+*.log
+npm-debug.log*
+coverage/
+.cache/
+tmp/
+temp/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

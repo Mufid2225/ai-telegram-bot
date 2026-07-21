@@ -1,8 +1,5 @@
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-const SERPAPI_KEY = process.env.SERPAPI_KEY;
-const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
-
 async function searchTavily(query, maxResults = 5) {
+  const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
   if (!TAVILY_API_KEY) return null;
   const resp = await fetch("https://api.tavily.com/search", {
     method: "POST",
@@ -22,6 +19,7 @@ async function searchTavily(query, maxResults = 5) {
 }
 
 async function searchNewsapi(query, maxResults = 5) {
+  const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
   if (!NEWSAPI_KEY) return null;
   const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
   const resp = await fetch(
@@ -32,6 +30,7 @@ async function searchNewsapi(query, maxResults = 5) {
 }
 
 async function searchSerpapi(query, maxResults = 5) {
+  const SERPAPI_KEY = process.env.SERPAPI_KEY;
   if (!SERPAPI_KEY) return null;
   const resp = await fetch(
     `https://serpapi.com/search?q=${encodeURIComponent(query)}&api_key=${SERPAPI_KEY}&engine=google&num=${maxResults}`
@@ -96,6 +95,7 @@ export async function webSearch(query, maxResults = 5) {
 }
 
 export async function newsSearch(query, maxResults = 5, language = "id") {
+  const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
   if (!NEWSAPI_KEY) return null;
   const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
   const resp = await fetch(

@@ -1,9 +1,9 @@
 const BASE = "https://www.alphavantage.co/query";
-const KEY = process.env.ALPHA_VANTAGE_KEY;
 
 async function fetchJson(params) {
-  if (!KEY) return null;
-  const url = `${BASE}?${new URLSearchParams({ ...params, apikey: KEY })}`;
+  const key = process.env.ALPHA_VANTAGE_KEY;
+  if (!key) return null;
+  const url = `${BASE}?${new URLSearchParams({ ...params, apikey: key })}`;
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
     const data = await resp.json();

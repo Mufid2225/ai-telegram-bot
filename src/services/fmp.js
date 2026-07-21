@@ -1,9 +1,10 @@
 const BASE = "https://financialmodelingprep.com/stable";
-const KEY = "i7oNz77ICuzXBORVF9DbiMcLnGGk0HfL";
 
 async function get(endpoint) {
+  const key = process.env.FMP_API_KEY;
+  if (!key) return null;
   try {
-    const resp = await fetch(`${BASE}${endpoint}&apikey=${KEY}`, { signal: AbortSignal.timeout(8000) });
+    const resp = await fetch(`${BASE}${endpoint}&apikey=${key}`, { signal: AbortSignal.timeout(8000) });
     if (!resp.ok) return null;
     return resp.json();
   } catch {
