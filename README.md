@@ -35,8 +35,22 @@ Hasilnya dikasih ke AI untuk dianalisis / dirangkum. Ukuran file dibatasi 10 MB 
 ### 7. Web Search (`/cari` + Auto)
 Cari info real-time dari internet. Chain: **Tavily** (primer) → **NewsAPI** (berita Indonesia) → **SerpAPI** (Google fallback). Bisa manual (`/cari IPO terbaru`) atau auto-detect kalo user nanya informasi terkini.
 
-### 8. Memory & Knowledge Graph
-Bot ingat fakta tentang user lewat knowledge graph (entity → attribute → value). Misal: "Sarah ulang tahun 15 Agustus" → disimpan, bisa dipanggil lagi kalo ditanya.
+### 9. MoneyTracker (Google Sheets Live Sync + Chat / OCR)
+Terhubung langsung ke Google Sheets `MoneyTracker` via Google Apps Script Web App sebagai *single source of truth*:
+- `/keuangan` — ringkasan `Dashboard` (Income, Alokasi, Realisasi, Saldo, overbudget) + grafik PNG
+- `/pengeluaran` — daftar transaksi terbaru dari tab `Expenses`
+- `/catat` atau chat natural / foto struk — ekstraksi transaksi otomatis dengan konfirmasi tombol `[Simpan]` / `[Batal]` sebelum menulis ke sheet
+- Konsultasi budget & simulasi mingguan (tanpa mencatatkan transaksi palsu)
+
+### 10. Catatan & Reminder Persisten
+Catatan biasa (`/catatan`), fakta user (`knowledge`), dan reminder terjadwal (`/remind`) tersimpan permanen di SQLite lokal (`data.db`) dan tidak hilang saat server restart.
+
+### 11. Workspace & Knowledge Base (`/menu` + Natural Chat)
+Integrasi opsional yang dapat dipilih langsung dari `/menu` (dengan indikator loading `0% → 100%` dan konteks aktif):
+- **Trello** — pilih board secara live, lihat ringkasan list terpaginasi, cari card, serta tambah/pindah/arsipkan card dengan tombol konfirmasi (`Simpan` / `Batal`)
+- **Notion** — pilih database/page yang terhubung ke integrasi Notion, lihat schema properti & baris terbaru, serta tambah/update/arsipkan baris dengan verifikasi baca ulang
+- **Superhuman Docs** — pilih dokumen & tabel, cek akses `write`/`read-only`, serta tambah/update baris tabel dengan polling mutasi async
+- **Knowledge Base (Read-Only)** — jelajahi folder & baca catatan Markdown lokal (`KB_DIR`) secara aman dengan proteksi path traversal
 
 ## Arsitektur Bot
 
@@ -143,10 +157,22 @@ User: "IPO terbaru apa?"
 - Table `memories` — tugas dan catatan user
 - Table `conversations` — riwayat chat; 10 pesan terakhir dipakai sebagai konteks AI
 - Table `knowledge` — knowledge graph (entity → attribute → value)
+- Table `reminders` — jadwal reminder persisten (tetap tersimpan saat server restart)
+- Table `pending_actions` — draft konfirmasi tombol untuk aksi tulis Google Sheets & Workspace (TTL 24 jam)
+- Table `active_context` — menyimpan sumber workspace terakhir yang dibuka user di `/menu`
+- Table `callback_refs` — referensi pendek 8-karakter agar `callback_data` tombol inline Telegram selalu di bawah batas 64 byte
 
 Percakapan lama dibersihkan saat startup berdasarkan `CONVERSATION_RETENTION_DAYS` (default 90 hari). Database lokal, WAL, dan file environment sudah diabaikan oleh Git.
 
 ## Perintah (Commands)
+
+### Menu & MoneyTracker (Google Sheets)
+| Command | Contoh | Fungsi |
+|---------|--------|--------|
+| `/menu` | `/menu` (atau `/start`) | Menu interaktif dengan inline button yang berganti halaman langsung |
+| `/catat` | `/catat bensin 25rb cash` | Buat draft catat pengeluaran/pemasukan dengan tombol konfirmasi |
+| `/keuangan` | `/keuangan november` | Ringkasan Dashboard (Income, Alokasi, Realisasi, Saldo) + grafik PNG |
+| `/pengeluaran` | `/pengeluaran november` | Daftar transaksi terbaru dari tab `Expenses` (beserta nomor baris) |
 
 ### Market
 | Command | Contoh | Fungsi |
@@ -154,13 +180,14 @@ Percakapan lama dibersihkan saat startup berdasarkan `CONVERSATION_RETENTION_DAY
 | `/saham` | `/saham BBCA` | Analisis saham lengkap (harga, fundamental, teknikal, berita) |
 | `/ekonomi` | `/ekonomi` | Ringkasan data ekonomi global terkini |
 
-### Manajemen Tugas
+### Manajemen Tugas, Catatan & Reminder
 | Command | Contoh | Fungsi |
 |---------|--------|--------|
-| `/tugas` | `/tugas` | Lihat semua tugas tersimpan |
-| `/hapus` | `/hapus 3` | Hapus tugas berdasarkan ID |
-| `/update` | `/update 3 deadline 2026-07-15` | Update field tugas |
-| `/remind` | `/remind` | Reminder deadline hari ini & besok |
+| `/catatan` | `/catatan` | Lihat catatan, tugas, dan memo tersimpan |
+| `/tugas` | `/tugas` | Lihat daftar tugas tersimpan |
+| `/hapus` | `/hapus 3` | Hapus catatan/tugas berdasarkan ID |
+| `/update` | `/update 3 deadline 2026-05-15` | Update field tugas |
+| `/remind` | `/remind` | Lihat reminder terjadwal & deadline tugas hari ini/besok |
 
 ### Web Search
 | Command | Contoh | Fungsi |
@@ -185,14 +212,14 @@ Bot menggunakan **9router** sebagai AI engine dengan model combo **PersonalAssis
 
 - Natural & santai (kayak ngobrol)
 - Tanpa markdown (dibersihkan via `stripMarkdown()`)
-- Tanpa emoji
+- Natural & ramah (boleh pakai emoji secukupnya)
 - Bahasa Indonesia informal
 - Berdasarkan data real-time yang di-inject ke system prompt
 
 ## Setup
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 22+
 - 9router running di `localhost:20128` (atau router API lain)
 
 ### Instalasi
@@ -217,12 +244,31 @@ Konfigurasi wajib:
 - `ROUTER_BASE_URL`
 - `ROUTER_MODEL`
 
+Konfigurasi MoneyTracker (Google Sheets Apps Script — opsional):
+- `SHEET_WEBHOOK_URL`
+- `SHEET_API_SECRET`
+
+#### Setup Google Apps Script (`MoneyTracker`)
+1. Buka Google Sheets `MoneyTracker` → menu **Ekstensi → Apps Script**.
+2. Salin seluruh isi `apps-script/MoneyTracker.gs` ke editor Apps Script lalu simpan.
+3. Atur `SHEET_API_SECRET` (di **Project Settings → Script Properties** atau variabel `FALLBACK_API_SECRET`) agar sama dengan nilai `SHEET_API_SECRET` di `.env.local`.
+4. Klik **Deploy → New deployment → Web app**:
+   - *Execute as*: **Me**
+   - *Who has access*: **Anyone**
+5. Salin URL `/exec` ke `SHEET_WEBHOOK_URL` di `.env.local`, lalu restart bot.
+
 Konfigurasi provider opsional:
 - `ALPHA_VANTAGE_KEY`
 - `FMP_API_KEY`
 - `TAVILY_API_KEY`
 - `SERPAPI_KEY`
 - `NEWSAPI_KEY`
+
+Konfigurasi Workspace & Knowledge Base (opsional):
+- `TRELLO_API_KEY` & `TRELLO_API_TOKEN`
+- `NOTION_API_KEY`
+- `SUPERHUMAN_API_TOKEN`
+- `KB_DIR` (path ke folder Markdown/Obsidian vault lokal, read-only)
 
 Konfigurasi lain:
 - `CONVERSATION_RETENTION_DAYS` — default 90 hari
@@ -232,20 +278,30 @@ Aplikasi berhenti saat startup jika konfigurasi wajib kosong atau tidak valid. S
 
 ### Struktur
 ```text
+SOUL.md            # Kepribadian & gaya bicara bot Nerissa (dibaca runtime)
+AGENTS.md          # Panduan AI coding agent untuk pengembangan repo ini
+apps-script/       # Google Apps Script Web App untuk MoneyTracker
 src/
 ├── index.js       # Entry point dan wiring Telegram
 ├── config.js      # Validasi konfigurasi
 ├── database.js    # SQLite
 ├── memory.js      # Knowledge dan memory
 ├── tools.js       # Definisi AI tools
-├── handlers/      # Handler task, market, file, dan pesan
-├── utils/         # Helper Telegram bersama
-└── services/      # Integrasi AI, market, chart, dan search
+├── handlers/      # Handler menu, money, task, market, file, dan pesan
+├── utils/         # Helper Telegram, error formatter, dan loader SOUL.md
+└── services/      # Integrasi AI, Google Sheets, reminder, market, chart, dan search
 ```
 
 ### Menjalankan
 ```bash
 npm start
+```
+
+Atau di Windows PowerShell (background runner dengan status health-check):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/nerissa-cli.ps1 start
+powershell -ExecutionPolicy Bypass -File scripts/nerissa-cli.ps1 status
+powershell -ExecutionPolicy Bypass -File scripts/nerissa-cli.ps1 stop
 ```
 
 ### Test

@@ -270,3 +270,71 @@ export function getPeriodLabel(period) {
   const labels = { "1w": "1 Minggu", "2w": "2 Minggu", "1m": "1 Bulan", "3m": "3 Bulan", "6m": "6 Bulan", "1y": "1 Tahun" };
   return labels[period] || period;
 }
+
+export async function getFinanceChartImage(summary) {
+  const cats = summary?.categories || [];
+  if (!cats.length) return null;
+
+  const labels = cats.map((c) => c.kategori);
+  const alokasi = cats.map((c) => Number(c.alokasi || 0));
+  const realisasi = cats.map((c) => Number(c.realisasi || 0));
+  const realColors = cats.map((c) => (c.overbudget ? "#ef5350" : "#26a69a"));
+
+  const config = {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Alokasi",
+          data: alokasi,
+          backgroundColor: "#60a5fa88",
+          borderColor: "#60a5fa",
+          borderWidth: 1,
+        },
+        {
+          label: "Realisasi",
+          data: realisasi,
+          backgroundColor: realColors,
+          borderColor: realColors,
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: false,
+      plugins: {
+        title: {
+          display: true,
+          text: `MoneyTracker — ${summary.month || ""} ${summary.year || ""}`.trim(),
+          color: "#f8fafc",
+          font: { size: 16, weight: "bold" },
+        },
+        legend: {
+          labels: { color: "#cbd5e1" },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "#94a3b8",
+            callback: (v) => `Rp ${Number(v).toLocaleString("id-ID")}`,
+          },
+          grid: { color: "#1e293b" },
+        },
+        y: {
+          ticks: { color: "#e2e8f0" },
+          grid: { color: "#1e293b" },
+        },
+      },
+    },
+  };
+
+  try {
+    return await canvas.renderToBuffer(config, "image/png");
+  } catch (e) {
+    console.error("[FINANCE CHART] render error:", e.message);
+    return null;
+  }
+}

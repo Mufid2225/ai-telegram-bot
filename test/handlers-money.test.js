@@ -1,0 +1,154 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createDatabase } from "../src/database.js";
+import { createPendingActionsStore } from "../src/services/money.js";
+import { handleMoneyCallback, sendFinanceChart } from "../src/handlers/money.js";
+
+function makeCallbackCtx(userId, messageText = "Draft Catat") {
+  const answers = [];
+  const edits = [];
+  return {
+    from: { id: userId },
+    callbackQuery: { message: { text: messageText } },
+    answerCbQuery: async (txt) => answers.push(txt),
+    editMessageText: async (txt, extra) => edits.push({ txt, extra }),
+    _answers: answers,
+    _edits: edits,
+  };
+}
+
+test("handleMoneyCallback blocks unauthorized users", async () => {
+  const db = createDatabase(":memory:", { quiet: true });
+  try {
+    const pendingStore = createPendingActionsStore(db);
+    const ctx = makeCallbackCtx("999");
+    await handleMoneyCallback({
+      ctx,
+      actionType: "confirm",
+      actionId: "abcd1234",
+      allowedUserId: "123456789",
+      pendingStore,
+      sheetsService: {},
+    });
+    assert.match(ctx._answers[0], /Akses ditolak/);
+    assert.equal(ctx._edits.length, 0);
+  } finally {
+    db.end();
+  }
+});
+
+test("handleMoneyCallback confirms once, writes to sheets, and rejects second click", async () => {
+  const db = createDatabase(":memory:", { quiet: true });
+  try {
+    const pendingStore = createPendingActionsStore(db);
+    const draft = await pendingStore.create({
+      userId: "123456789",
+      kind: "add_expenses",
+      payload: { items: [{ date: "2026-11-17", transaksi: "Cash", uraian: "Bensin", kategori: "Transportasi", bank: "Cash", nilai: 25000 }] },
+      summaryText: "Bensin Rp 25.000",
+    });
+
+    let writeCount = 0;
+    const fakeSheets = {
+      addExpenses: async () => {
+        writeCount++;
+        return { addedRows: [19] };
+      },
+    };
+
+    const ctx1 = makeCallbackCtx("123456789");
+    await handleMoneyCallback({
+      ctx: ctx1,
+      actionType: "confirm",
+      actionId: draft.id,
+      allowedUserId: "123456789",
+      pendingStore,
+      sheetsService: fakeSheets,
+      stepMs: 0,
+      finishDelayMs: 0,
+    });
+    assert.equal(writeCount, 1);
+    assert.equal(ctx1._edits[0].txt, "Loading ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒ 0%");
+    assert.match(ctx1._edits.at(-1).txt, /Tersimpan ke Google Sheets/);
+    assert.equal((await pendingStore.getById(draft.id, "123456789")).status, "confirmed");
+
+    const ctx2 = makeCallbackCtx("123456789");
+    await handleMoneyCallback({
+      ctx: ctx2,
+      actionType: "confirm",
+      actionId: draft.id,
+      allowedUserId: "123456789",
+      pendingStore,
+      sheetsService: fakeSheets,
+    });
+    assert.equal(writeCount, 1);
+    assert.match(ctx2._answers[0], /sudah/i);
+  } finally {
+    db.end();
+  }
+});
+
+test("handleMoneyCallback restores pending status on transient sheets error and handles cancel", async () => {
+  const db = createDatabase(":memory:", { quiet: true });
+  try {
+    const pendingStore = createPendingActionsStore(db);
+    const draft = await pendingStore.create({
+      userId: "123456789",
+      kind: "add_expenses",
+      payload: { items: [{ date: "2026-11-17", transaksi: "Cash", uraian: "Kopi", kategori: "Jajan", bank: "Cash", nilai: 15000 }] },
+      summaryText: "Kopi Rp 15.000",
+    });
+
+    const failCtx = makeCallbackCtx("123456789");
+    await handleMoneyCallback({
+      ctx: failCtx,
+      actionType: "confirm",
+      actionId: draft.id,
+      allowedUserId: "123456789",
+      pendingStore,
+      sheetsService: { addExpenses: async () => { throw new Error("Timeout"); } },
+      stepMs: 0,
+      finishDelayMs: 0,
+    });
+    assert.match(failCtx._edits.at(-1).txt, /Gagal menyimpan: Timeout/);
+    assert.equal((await pendingStore.getById(draft.id, "123456789")).status, "pending");
+
+    const cancelCtx = makeCallbackCtx("123456789", "Draft Kopi");
+    await handleMoneyCallback({
+      ctx: cancelCtx,
+      actionType: "cancel",
+      actionId: draft.id,
+      allowedUserId: "123456789",
+      pendingStore,
+      sheetsService: {},
+    });
+    assert.match(cancelCtx._edits[0].txt, /Dibatalkan/);
+    assert.equal((await pendingStore.getById(draft.id, "123456789")).status, "cancelled");
+  } finally {
+    db.end();
+  }
+});
+
+test("sendFinanceChart retries once on transient upload failure and degrades gracefully", async () => {
+  const buf = Buffer.from("png");
+  let attempts = 0;
+  const retryCtx = {
+    chat: { id: 1 },
+    telegram: { sendChatAction: async () => {} },
+    replyWithPhoto: async (file, opts) => {
+      attempts++;
+      assert.equal(file.filename, "moneytracker.png");
+      assert.equal(opts.caption, "MoneyTracker — November 2026");
+      if (attempts === 1) throw new Error("socket hang up");
+    },
+  };
+  assert.equal(await sendFinanceChart(retryCtx, buf, "MoneyTracker — November 2026"), true);
+  assert.equal(attempts, 2);
+
+  const failCtx = {
+    chat: { id: 1 },
+    telegram: { sendChatAction: async () => {} },
+    replyWithPhoto: async () => { throw new Error("ECONNRESET"); },
+  };
+  assert.equal(await sendFinanceChart(failCtx, buf, "MoneyTracker — November 2026"), false);
+});

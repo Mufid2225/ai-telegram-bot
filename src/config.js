@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", override: true });
 
 const REQUIRED = ["BOT_TOKEN", "ALLOWED_USER_ID", "ROUTER_BASE_URL", "ROUTER_API_KEY", "ROUTER_MODEL"];
 
@@ -19,6 +19,13 @@ export function validateConfig(env = process.env) {
     routerModel: env.ROUTER_MODEL,
     retentionDays,
     port: Number(env.PORT || 3000),
+    sheetWebhookUrl: (env.SHEET_WEBHOOK_URL || "").trim().replace(/\/+$/, ""),
+    sheetApiSecret: (env.SHEET_API_SECRET || "").trim(),
+    trelloApiKey: (env.TRELLO_API_KEY || "").trim(),
+    trelloApiToken: (env.TRELLO_API_TOKEN || "").trim(),
+    notionApiKey: (env.NOTION_API_KEY || env.NOTION_TOKEN || "").trim(),
+    superhumanApiToken: (env.SUPERHUMAN_API_TOKEN || "").trim(),
+    kbDir: (env.KB_DIR || "").trim(),
   };
 }
 

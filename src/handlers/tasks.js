@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { truncateCaption } from "../utils/telegram.js";
+import { truncateCaption, replyText } from "../utils/telegram.js";
 
 export function isImportantMessage(text) {
   return ["tugas", "deadline", "ujian", "jadwal", "kuis", "praktikum", "rapat", "reminder", "dikumpulkan", "presentasi", "pr", "mapel"]
@@ -30,12 +30,12 @@ export function extractTaskInfo(text, now) {
   return { type, subject, deadline: parseDeadline(text, now) };
 }
 
-export function registerTaskHandlers(bot, { pool }) {
+export function registerTaskHandlers(bot, { pool, reminderStore }) {
   bot.command("tugas", async (ctx) => {
     try {
       const { rows } = await pool.query(
         `SELECT * FROM memories WHERE user_id = $1 AND type = 'tugas' ORDER BY id DESC LIMIT 10`,
-        [ctx.from.id]
+        [String(ctx.from.id)]
       );
       if (!rows.length) return ctx.reply("Tidak ada tugas tersimpan.");
       for (const task of rows) {
@@ -49,15 +49,32 @@ export function registerTaskHandlers(bot, { pool }) {
     }
   });
 
+  bot.command("catatan", async (ctx) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, type, subject, deadline, content FROM memories WHERE user_id = $1 ORDER BY id DESC LIMIT 15`,
+        [String(ctx.from.id)]
+      );
+      if (!rows.length) return ctx.reply("Belum ada catatan tersimpan.");
+      const lines = rows.map(
+        (item) => `#${item.id} [${item.type}]${item.deadline ? ` (${item.deadline})` : ""}: ${item.content}`
+      );
+      await replyText(ctx, `Catatan & Tugas Tersimpan:\n\n${lines.join("\n")}`);
+    } catch (error) {
+      console.error(error);
+      await ctx.reply("Gagal mengambil catatan.");
+    }
+  });
+
   bot.command("hapus", async (ctx) => {
     try {
       const id = ctx.message.text.split(" ")[1];
       if (!id) return ctx.reply("Gunakan: /hapus ID");
-      const result = await pool.query("DELETE FROM memories WHERE id = $1 AND user_id = $2", [id, ctx.from.id]);
-      await ctx.reply(result.rowCount ? "Tugas berhasil dihapus." : "Tugas tidak ditemukan.");
+      const result = await pool.query("DELETE FROM memories WHERE id = $1 AND user_id = $2", [id, String(ctx.from.id)]);
+      await ctx.reply(result.rowCount ? "Catatan/tugas berhasil dihapus." : "Item tidak ditemukan.");
     } catch (error) {
       console.error(error);
-      await ctx.reply("Gagal menghapus tugas.");
+      await ctx.reply("Gagal menghapus item.");
     }
   });
 
@@ -68,7 +85,7 @@ export function registerTaskHandlers(bot, { pool }) {
       const value = args.slice(3).join(" ");
       if (!id || !field || !value) return ctx.reply("Gunakan:\n/update ID field value\n\nContoh:\n/update 3 deadline 2026-05-15");
       if (!["subject", "deadline", "content", "type"].includes(field)) return ctx.reply("Field tidak valid.");
-      const result = await pool.query(`UPDATE memories SET ${field} = $1 WHERE id = $2 AND user_id = $3`, [value, id, ctx.from.id]);
+      const result = await pool.query(`UPDATE memories SET ${field} = $1 WHERE id = $2 AND user_id = $3`, [value, id, String(ctx.from.id)]);
       await ctx.reply(result.rowCount ? "Task berhasil diupdate." : "Task tidak ditemukan.");
     } catch (error) {
       console.error(error);
@@ -80,14 +97,32 @@ export function registerTaskHandlers(bot, { pool }) {
     try {
       const today = dayjs().format("YYYY-MM-DD");
       const tomorrow = dayjs().add(1, "day").format("YYYY-MM-DD");
-      const { rows } = await pool.query(
+      const { rows: dueTasks } = await pool.query(
         `SELECT * FROM memories WHERE user_id = $1 AND type = 'tugas' AND (deadline = $2 OR deadline = $3) ORDER BY deadline ASC`,
-        [ctx.from.id, today, tomorrow]
+        [String(ctx.from.id), today, tomorrow]
       );
-      if (!rows.length) return ctx.reply("Tidak ada deadline hari ini atau besok.");
-      let text = "⏰ Reminder Tugas:\n";
-      for (const task of rows) text += `\n\n🆔 ${task.id}\n📚 ${task.subject || "-"}\n📅 ${task.deadline}\n📝 ${task.content}`;
-      await ctx.reply(text);
+      const scheduled = reminderStore ? await reminderStore.listPending(ctx.from.id) : [];
+
+      if (!dueTasks.length && !scheduled.length) {
+        return ctx.reply("Tidak ada reminder aktif atau deadline hari ini/besok.");
+      }
+
+      const parts = [];
+      if (scheduled.length) {
+        parts.push(
+          "Reminder Terjadwal:\n" +
+          scheduled
+            .map((r) => `- #${r.id} (${new Date(r.due_at).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}): ${r.message}`)
+            .join("\n")
+        );
+      }
+      if (dueTasks.length) {
+        parts.push(
+          "Deadline Tugas (Hari Ini / Besok):\n" +
+          dueTasks.map((t) => `- #${t.id} [${t.subject || "-"}] (${t.deadline}): ${t.content}`).join("\n")
+        );
+      }
+      await replyText(ctx, parts.join("\n\n"));
     } catch (error) {
       console.error(error);
       await ctx.reply("Gagal mengambil reminder.");
