@@ -1,6 +1,6 @@
 # Nerrisa Bot — Telegram AI Assistant
 
-Telegram bot asisten pintar dengan kemampuan analisis saham, trading, ekonomi global, manajemen tugas sekolah, file processing, dan web search. Ditenagai oleh AI (9router) dengan data real-time dari Yahoo Finance, Alpha Vantage, Financial Modeling Prep, dan web search API.
+Telegram bot asisten pribadi berbasis **Node.js (ESM)** & **Telegraf** dengan menu inline interaktif (`/menu`), integrasi **MoneyTracker (Google Sheets)**, **Google Calendar**, **Trello**, **Notion**, **Superhuman Docs**, **Knowledge Base lokal (read-only)**, catatan & reminder persisten, analisis saham/ekonomi, pemrosesan file (OCR/PDF/DOCX), dan web search. Ditenagai langsung oleh **OpenAI API** (`gpt-6-luna` / endpoint OpenAI-compatible).
 
 ## Akses
 
@@ -35,20 +35,20 @@ Hasilnya dikasih ke AI untuk dianalisis / dirangkum. Ukuran file dibatasi 10 MB 
 ### 7. Web Search (`/cari` + Auto)
 Cari info real-time dari internet. Chain: **Tavily** (primer) → **NewsAPI** (berita Indonesia) → **SerpAPI** (Google fallback). Bisa manual (`/cari IPO terbaru`) atau auto-detect kalo user nanya informasi terkini.
 
-### 9. MoneyTracker (Google Sheets Live Sync + Chat / OCR)
+### 8. MoneyTracker (Google Sheets Live Sync + Chat / OCR)
 Terhubung langsung ke Google Sheets `MoneyTracker` via Google Apps Script Web App sebagai *single source of truth*:
 - `/keuangan` — ringkasan `Dashboard` (Income, Alokasi, Realisasi, Saldo, overbudget) + grafik PNG
 - `/pengeluaran` — daftar transaksi terbaru dari tab `Expenses`
-- `/catat` atau chat natural / foto struk — ekstraksi transaksi otomatis dengan konfirmasi tombol `[Simpan]` / `[Batal]` sebelum menulis ke sheet
+- `/catat` atau chat natural / foto struk — ekstraksi transaksi otomatis dengan konfirmasi tombol `[✅ Simpan]` / `[❌ Batal]` sebelum menulis ke sheet
 - Konsultasi budget & simulasi mingguan (tanpa mencatatkan transaksi palsu)
 
-### 10. Catatan & Reminder Persisten
+### 9. Catatan & Reminder Persisten
 Catatan biasa (`/catatan`), fakta user (`knowledge`), dan reminder terjadwal (`/remind`) tersimpan permanen di SQLite lokal (`data.db`) dan tidak hilang saat server restart.
 
-### 11. Google Calendar, Workspace & Knowledge Base (`/menu` + Natural Chat)
-Integrasi opsional yang dapat dipilih langsung dari `/menu` (dengan indikator loading `0% → 100%` dan konteks aktif):
-- **Google Calendar** — terhubung melalui jembatan Apps Script (`MoneyTracker.gs` + `CalendarApp`) tanpa setup OAuth/Google Cloud terpisah; lihat agenda Hari Ini / 7 Hari / 30 Hari, pilih sub-kalender, deteksi jadwal bentrok otomatis, serta tambah/geser/hapus jadwal dengan konfirmasi tombol (`Simpan` / `Batal`)
-- **Trello** — pilih board secara live, lihat ringkasan list terpaginasi, cari card, serta tambah/pindah/arsipkan card dengan tombol konfirmasi (`Simpan` / `Batal`)
+### 10. Google Calendar, Workspace & Knowledge Base (`/menu` + Natural Chat)
+Integrasi opsional yang dapat dipilih langsung dari `/menu` (dengan indikator loading tombol `0% → 100%` dan konteks aktif):
+- **Google Calendar** — terhubung melalui jembatan Apps Script (`MoneyTracker.gs` + `CalendarApp`) tanpa setup OAuth/Google Cloud terpisah; lihat agenda Hari Ini / 7 Hari / 30 Hari, pilih sub-kalender, deteksi jadwal bentrok otomatis, serta tambah/geser/hapus jadwal dengan konfirmasi tombol (`✅ Simpan` / `❌ Batal`)
+- **Trello** — pilih board secara live, lihat ringkasan list terpaginasi, cari card, serta tambah/pindah/arsipkan card dengan tombol konfirmasi (`✅ Simpan` / `❌ Batal`)
 - **Notion** — pilih database/page yang terhubung ke integrasi Notion, lihat schema properti & baris terbaru, serta tambah/update/arsipkan baris dengan verifikasi baca ulang
 - **Superhuman Docs** — pilih dokumen & tabel, cek akses `write`/`read-only`, serta tambah/update baris tabel dengan polling mutasi async
 - **Knowledge Base (Read-Only)** — jelajahi folder & baca catatan Markdown lokal (`KB_DIR`) secara aman dengan proteksi path traversal
@@ -65,8 +65,8 @@ Integrasi opsional yang dapat dipilih langsung dari `/menu` (dengan indikator lo
               ▼                       ▼      ▼                         ▼
      ┌──────────────────┐   ┌──────────────┐   ┌───────────────┐  ┌───────────┐
      │    AI Engine     │   │  Market Data │   │   Database    │  │  Search   │
-     │  9router /       │   │  (3 sumber)  │   │   SQLite      │  │  Web      │
-     │ PersonalAssistant│   │              │   │               │  │           │
+     │   OpenAI API     │   │  (3 sumber)  │   │    SQLite     │  │  Web      │
+     │  (gpt-6-luna)    │   │              │   │   (data.db)   │  │           │
      └──────────────────┘   └──────┬───────┘   └───────┬───────┘  └─────┬─────┘
                                    │                   │                │
                                    ▼                   ▼                ▼
@@ -198,30 +198,31 @@ Percakapan lama dibersihkan saat startup berdasarkan `CONVERSATION_RETENTION_DAY
 ### Utility
 | Command | Contoh | Fungsi |
 |---------|--------|--------|
-| `/test` | `/test` | Test koneksi ke AI router |
+| `/test` | `/test` | Test koneksi ke OpenAI / AI endpoint aktif |
 
-### Auto-detect (Tanpa Command)
+### Auto-detect & Chat Natural (Tanpa Command)
 - **Saham**: "BBCA gimana?" → auto-analisis
 - **Ekonomi**: "inflasi naik?" → auto-ambil data ekonomi
 - **IPO**: "IPO terbaru?" → auto-web search
-- **Tugas**: "tugas matematika deadline besok" → auto-simpan
-- **File**: kirim foto/PDF/DOCX → auto-proses OCR/extract
+- **MoneyTracker**: "tadi beli bensin 25rb cash" / kirim foto struk → buat draft pengeluaran (`✅ Simpan` / `❌ Batal`)
+- **Google Calendar**: "jadwal minggu ini apa aja?" / "besok jam 10-11 jadwalin bimbingan TA"
+- **Workspace & KB**: "pindah card ... ke In Progress", "cari test case auth di Notion", "cek KB soal ..."
+- **Tugas & File**: "tugas matematika deadline besok" atau kirim foto/PDF/DOCX → auto-proses OCR/extract
 
 ## Cara Kerja AI
 
-Bot menggunakan **9router** sebagai AI engine dengan model combo **PersonalAssistant** yang merouting ke beberapa model NVIDIA (Nemotron, Mistral, dll). Semua respon AI:
+Bot menembak langsung **OpenAI API** (endpoint kompatibel `/chat/completions`, menggunakan model **`gpt-6-luna`**) dengan *multi-step tool calling* agar AI dapat membaca data live maupun membuat draft konfirmasi secara aman. Semua respon chat:
 
-- Natural & santai (kayak ngobrol)
-- Tanpa markdown (dibersihkan via `stripMarkdown()`)
-- Natural & ramah (boleh pakai emoji secukupnya)
-- Bahasa Indonesia informal
-- Berdasarkan data real-time yang di-inject ke system prompt
+- Diatur persona dan batasannya lewat [SOUL.md](SOUL.md) (dibaca runtime setiap pesan)
+- Teks polos bebas sintaks markdown (`stripMarkdown()`)
+- Natural, santai, ramah dalam Bahasa Indonesia informal (dengan emoji secukupnya)
+- Memakai indikator *typing...* native di chat biasa, dan progress bar `0% → 100%` khusus saat interaksi tombol `/menu` & `✅ Simpan`
 
 ## Setup
 
 ### Prerequisites
 - Node.js 22+
-- 9router running di `localhost:20128` (atau router API lain)
+- OpenAI API Key (atau endpoint OpenAI-compatible) beserta model `gpt-6-luna`
 
 ### Instalasi
 ```bash
@@ -231,7 +232,7 @@ npm install
 ```
 
 ### Environment Variables
-Salin `.env.example` menjadi `.env.local`, lalu isi nilainya. Aplikasi hanya memuat `.env.local`:
+Salin `.env.example` menjadi `.env.local`, lalu isi nilainya. Aplikasi memuat `.env.local` (`override: true`), dan kredensial opsional yang tidak tertulis di `.env.local` tetap dapat dibaca dari OS/User Environment Variables:
 ```bash
 cp .env.example .env.local
 ```
@@ -241,9 +242,9 @@ Jangan commit `.env.local`. `ALLOWED_USER_ID` diisi dengan numeric Telegram user
 Konfigurasi wajib:
 - `BOT_TOKEN`
 - `ALLOWED_USER_ID`
-- `ROUTER_API_KEY`
-- `ROUTER_BASE_URL`
-- `ROUTER_MODEL`
+- `ROUTER_API_KEY` — OpenAI API key (atau provider OpenAI-compatible)
+- `ROUTER_BASE_URL` — contoh: `https://api.openai.com/v1`
+- `ROUTER_MODEL` — contoh: `gpt-6-luna`
 
 Konfigurasi MoneyTracker (Google Sheets Apps Script — opsional):
 - `SHEET_WEBHOOK_URL`
@@ -282,16 +283,20 @@ Aplikasi berhenti saat startup jika konfigurasi wajib kosong atau tidak valid. S
 ```text
 SOUL.md            # Kepribadian & gaya bicara bot Nerissa (dibaca runtime)
 AGENTS.md          # Panduan AI coding agent untuk pengembangan repo ini
-apps-script/       # Google Apps Script Web App untuk MoneyTracker
+apps-script/       # Google Apps Script Web App untuk MoneyTracker & Google Calendar
+docs/superpowers/  # Dokumen spec & implementation plan
+scripts/           # CLI runner PowerShell (nerissa-cli.ps1)
 src/
 ├── index.js       # Entry point dan wiring Telegram
-├── config.js      # Validasi konfigurasi
-├── database.js    # SQLite
-├── memory.js      # Knowledge dan memory
-├── tools.js       # Definisi AI tools
-├── handlers/      # Handler menu, money, task, market, file, dan pesan
-├── utils/         # Helper Telegram, error formatter, dan loader SOUL.md
-└── services/      # Integrasi AI, Google Sheets, reminder, market, chart, dan search
+├── config.js      # Validasi konfigurasi env
+├── database.js    # SQLite schema & pool (data.db)
+├── memory.js      # Knowledge graph dan memory
+├── tools.js       # Registrasi AI tools gabungan
+├── tools/         # Tool terarah Workspace/KB dan Google Calendar
+├── handlers/      # Handler menu, workspace-menu, actions, money, task, market, file, dan messages
+├── utils/         # Helper Telegram, HTTP client, error redaction, dan loader SOUL.md
+└── services/      # Integrasi OpenAI API, Sheets, Calendar, Trello, Notion, Superhuman, KB, pending, market, chart, search
+test/              # Unit & integration test offline (node --test)
 ```
 
 ### Menjalankan
@@ -334,4 +339,4 @@ Bot akan:
 - Tavily free tier: 1000 request/bulan — untuk web search
 - Bot menggunakan SQLite lokal; backup `data.db` jika datanya perlu dipertahankan
 - Jangan commit `.env.local`, database, log, atau artefak chart pengujian
-- Pengguna hasil clone harus memakai bot token, router, dan API key milik sendiri
+- Pengguna hasil clone harus memakai bot token, OpenAI API key, dan API key milik sendiri
