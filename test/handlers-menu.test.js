@@ -132,13 +132,37 @@ test("handleMenuCallback ignores Telegram 'message is not modified' on refresh",
     assert.equal(ctx._answers[0], "");
 });
 
-test("handleMenuCallback exposes workspace buttons on home and dispatches ws:trello", async () => {
+test("handleMenuCallback exposes live dashboard info and workspace buttons on home and dispatches ws:trello", async () => {
   const db = createDatabase(":memory:", { quiet: true });
   try {
+    const reminderStore = createReminderStore(db);
+    await db.query(
+      "INSERT INTO memories (user_id, type, content, created_at) VALUES ($1, $2, $3, $4)",
+      ["123456789", "catatan", "Cek oli", new Date().toISOString()]
+    );
+    await reminderStore.create({
+      userId: "123456789",
+      message: "Bayar listrik",
+      dueAt: "2026-11-20T09:00:00+07:00",
+    });
+
     const homeCtx = makeCtx("123456789");
-    await handleMenuCallback({ ctx: homeCtx, action: "home", allowedUserId: "123456789", pool: db, sheetsService: {}, reminderStore: {} });
+    await handleMenuCallback({
+      ctx: homeCtx,
+      action: "home",
+      allowedUserId: "123456789",
+      pool: db,
+      sheetsService: { isConfigured: () => true },
+      calendarService: { isConfigured: () => true },
+      trelloService: { isConfigured: () => true },
+      reminderStore,
+    });
+    assert.match(homeCtx._edits[0].txt, /Nerissa Personal Hub/);
+    assert.match(homeCtx._edits[0].txt, /Catatan & Tugas: 1/);
+    assert.match(homeCtx._edits[0].txt, /Reminder Aktif: 1/);
+    assert.match(homeCtx._edits[0].txt, /Sheets • Calendar • Trello/);
     const homeCallbacks = homeCtx._edits[0].extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
-    for (const cb of ["menu:ws:trello", "menu:ws:notion", "menu:ws:superhuman", "menu:ws:kb"]) {
+    for (const cb of ["menu:ws:trello", "menu:ws:notion", "menu:ws:superhuman", "menu:ws:kb", "menu:ws:calendar"]) {
       assert.ok(homeCallbacks.includes(cb), `missing ${cb}`);
     }
 

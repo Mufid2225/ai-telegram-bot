@@ -320,6 +320,84 @@ async function kbReadView(kbService, workspaceStore, userId, { path: notePath, s
   return view(`📝 ${note.path} (Baris ${note.startLine}-${note.endLine}/${note.totalLines})\n\n${note.text}`, keyboard);
 }
 
+function formatAgendaEventLine(ev) {
+  if (ev.isAllDay) {
+    return `• [${ev.startIso} • Seharian] ${ev.title}${ev.location ? ` (${ev.location})` : ""}`;
+  }
+  const s = new Date(ev.startIso);
+  const e = new Date(ev.endIso);
+  const dayLabel = s.toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short" });
+  const tStart = s.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  const tEnd = e.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  return `• ${dayLabel} ${tStart}-${tEnd} — ${ev.title}${ev.location ? ` (${ev.location})` : ""}`;
+}
+
+async function calendarEventsView(calendarService, workspaceStore, userId, { cid = "primary", cn = "Kalender Utama", days = 7 } = {}) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  const end = new Date(start.getTime() + Number(days) * 86400000);
+
+  const events = await req(calendarService, "Google Calendar").listEvents({
+    calendarId: cid,
+    includeAllOwned: cid === "primary",
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    limit: 20,
+  });
+
+  if (workspaceStore) {
+    await workspaceStore.setActiveContext({
+      userId,
+      platform: "calendar",
+      sourceId: cid,
+      sourceName: cn,
+      extra: { days },
+    });
+  }
+
+  const rangeLabel = days === 1 ? "Hari Ini" : `${days} Hari ke Depan`;
+  const listText = events.length
+    ? events.map(formatAgendaEventLine).join("\n")
+    : "📭 Tidak ada jadwal pada rentang waktu ini.";
+
+  const hint =
+    `\n\n💡 Aktif di Google Calendar (${cn}). Ketik perintah langsung di chat, misal:\n` +
+    `- "besok jam 13.00-14.30 jadwalin bimbingan TA"\n` +
+    `- "hari Jumat aku kosong jam berapa?"\n` +
+    `(Semua tambah/ubah/hapus jadwal wajib konfirmasi Simpan/Batal)`;
+
+  const keyboard = [
+    [
+      await refBtn(workspaceStore, "📌 Hari Ini", { p: "cal", k: "ev", cid, cn, days: 1 }),
+      await refBtn(workspaceStore, "🗓️ 7 Hari", { p: "cal", k: "ev", cid, cn, days: 7 }),
+      await refBtn(workspaceStore, "📅 30 Hari", { p: "cal", k: "ev", cid, cn, days: 30 }),
+    ],
+    [
+      await refBtn(workspaceStore, "🗂️ Pilih Kalender", { p: "cal", k: "pick" }),
+      await refBtn(workspaceStore, "🔄 Refresh", { p: "cal", k: "ev", cid, cn, days }),
+    ],
+    [HOME_BTN],
+  ];
+
+  return view(`📅 Google Calendar — ${cn}\n🕒 Rentang: ${rangeLabel} (${events.length} agenda)\n\n${listText}${hint}`, keyboard);
+}
+
+async function calendarPickerView(calendarService, workspaceStore) {
+  const calendars = await req(calendarService, "Google Calendar").listCalendars();
+  const owned = calendars.filter((c) => c.isOwnedByMe || c.isPrimary);
+  const btns = await Promise.all(
+    owned.slice(0, 12).map((c) =>
+      refBtn(workspaceStore, `${c.isPrimary ? "⭐ " : "📅 "}${c.name}`, { p: "cal", k: "ev", cid: c.id, cn: c.name, days: 7 })
+    )
+  );
+  const keyboard = chunkRows(btns, 1);
+  keyboard.push([
+    await refBtn(workspaceStore, "« Semua Kalender Utama", { p: "cal", k: "ev", cid: "primary", cn: "Kalender Utama", days: 7 }),
+    HOME_BTN,
+  ]);
+  return view(`🗂️ Pilih Kalender Google (${owned.length}):\n\nPilih kalender spesifik atau gunakan Kalender Utama:`, keyboard);
+}
+
 /**
  * Dispatch workspace & Knowledge Base inline menu actions.
  */
@@ -331,12 +409,14 @@ export async function handleWorkspaceMenuAction({
   notionService,
   superhumanService,
   kbService,
+  calendarService,
 }) {
   if (action === "ws:trello") return trelloBoardsView(trelloService, workspaceStore, false);
   if (action === "ws:trello:all") return trelloBoardsView(trelloService, workspaceStore, true);
   if (action === "ws:notion") return notionSourcesView(notionService, workspaceStore);
   if (action === "ws:superhuman") return superhumanDocsView(superhumanService, workspaceStore);
   if (action === "ws:kb") return kbDirView(kbService, workspaceStore, userId, { dir: "", pg: 0 });
+  if (action === "ws:calendar") return calendarEventsView(calendarService, workspaceStore, userId, { cid: "primary", cn: "Kalender Utama", days: 7 });
 
   if (action.startsWith("ws:r:")) {
     const ref = action.slice(5);
@@ -360,6 +440,10 @@ export async function handleWorkspaceMenuAction({
     if (payload.p === "kb") {
       if (payload.k === "dir") return kbDirView(kbService, workspaceStore, userId, payload);
       if (payload.k === "rd") return kbReadView(kbService, workspaceStore, userId, payload);
+    }
+    if (payload.p === "cal") {
+      if (payload.k === "ev") return calendarEventsView(calendarService, workspaceStore, userId, payload);
+      if (payload.k === "pick") return calendarPickerView(calendarService, workspaceStore);
     }
   }
 

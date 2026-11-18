@@ -139,3 +139,34 @@ export async function runWithProgress({
   }
   return result;
 }
+
+export async function runWithTyping({
+  ctx,
+  task,
+  formatText = (value) => String(value ?? ""),
+  getPendingAction = () => undefined,
+  onError,
+}) {
+  const sendTyping = () => Promise.resolve(ctx.telegram?.sendChatAction(ctx.chat.id, "typing")).catch(() => {});
+  await sendTyping();
+  const timer = setInterval(sendTyping, 4000);
+  timer.unref?.();
+
+  try {
+    const result = await task();
+    const text = formatText(result);
+    if (text) {
+      await replyMaybeWithConfirm(ctx, text, getPendingAction());
+    }
+    return result;
+  } catch (error) {
+    if (onError) {
+      const errText = onError(error);
+      if (errText) await replyText(ctx, errText);
+      return null;
+    }
+    throw error;
+  } finally {
+    clearInterval(timer);
+  }
+}

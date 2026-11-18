@@ -23,12 +23,93 @@ export const BOT_COMMANDS = [
   { command: "test", description: "Tes koneksi AI router" },
 ];
 
-function homeView() {
+const PLATFORM_LABELS = {
+  trello: "Trello",
+  notion: "Notion",
+  superhuman: "Superhuman Docs",
+  kb: "Knowledge Base",
+  calendar: "Google Calendar",
+};
+
+function formatNowHeader(now = new Date()) {
+  const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+  const months = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+  ];
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  return `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()} • ${hh}.${mm} WIB`;
+}
+
+async function homeView({
+  pool,
+  userId,
+  reminderStore,
+  workspaceStore,
+  sheetsService,
+  calendarService,
+  trelloService,
+  notionService,
+  superhumanService,
+  kbService,
+} = {}) {
+  let notesCount = 0;
+  let dueSoonCount = 0;
+  let remindersCount = 0;
+  let activeLabel = "Belum dipilih";
+
+  if (pool?.query && userId) {
+    const uid = String(userId);
+    const today = dayjs().format("YYYY-MM-DD");
+    const tomorrow = dayjs().add(1, "day").format("YYYY-MM-DD");
+    const totalRes = await pool.query("SELECT COUNT(*) AS cnt FROM memories WHERE user_id = $1", [uid]);
+    const dueRes = await pool.query(
+      "SELECT COUNT(*) AS cnt FROM memories WHERE user_id = $1 AND type = 'tugas' AND (deadline = $2 OR deadline = $3)",
+      [uid, today, tomorrow]
+    );
+    notesCount = Number(totalRes.rows?.[0]?.cnt || 0);
+    dueSoonCount = Number(dueRes.rows?.[0]?.cnt || 0);
+  }
+
+  if (reminderStore?.listPending && userId) {
+    const pending = await reminderStore.listPending(userId);
+    remindersCount = pending.length;
+  }
+
+  if (workspaceStore?.getActiveContext && userId) {
+    const active = await workspaceStore.getActiveContext(userId);
+    if (active) {
+      const pName = PLATFORM_LABELS[active.platform] || active.platform;
+      activeLabel = `${pName} — ${active.sourceName}`;
+    }
+  }
+
+  const readyServices = [
+    sheetsService?.isConfigured?.() && "Sheets",
+    calendarService?.isConfigured?.() && "Calendar",
+    trelloService?.isConfigured?.() && "Trello",
+    notionService?.isConfigured?.() && "Notion",
+    superhumanService?.isConfigured?.() && "Superhuman",
+    kbService?.isConfigured?.() && "KB",
+  ].filter(Boolean);
+
+  const dueSuffix = dueSoonCount > 0 ? ` (${dueSoonCount} deadline dekat)` : "";
+  const integrationsLine = readyServices.length ? readyServices.join(" • ") : "Catatan & Memori Lokal";
+
   return {
     text:
-      "✨ Menu Nerissa Assistant\n\n" +
-      "Hai! Pilih salah satu menu di bawah untuk lihat data langsung di sini, " +
-      "atau langsung aja chat / kirim foto struk seperti biasa ya:",
+      `✨ Nerissa Personal Hub\n` +
+      `🗓️ ${formatNowHeader()}\n\n` +
+      `📊 Status Cepat:\n` +
+      `• 📝 Catatan & Tugas: ${notesCount} tersimpan${dueSuffix}\n` +
+      `• ⏰ Reminder Aktif: ${remindersCount} pengingat terjadwal\n` +
+      `• 🎯 Konteks Terakhir: ${activeLabel}\n` +
+      `• 🔌 Integrasi Siap: ${integrationsLine}\n\n` +
+      `💡 Pintasan:\n` +
+      `• Chat langsung untuk tanya budget, cek jadwal kosong, atau kelola task\n` +
+      `• Kirim foto struk / QRIS untuk otomatis dibuatkan draft pengeluaran\n` +
+      `• Pilih tombol di bawah untuk jelajahi data live:`,
     extra: {
       reply_markup: {
         inline_keyboard: [
@@ -39,6 +120,9 @@ function homeView() {
           [
             { text: "📝 Catatan & Tugas", callback_data: "menu:notes" },
             { text: "⏰ Reminder Aktif", callback_data: "menu:reminders" },
+          ],
+          [
+            { text: "📅 Google Calendar", callback_data: "menu:ws:calendar" },
           ],
           [
             { text: "📋 Trello", callback_data: "menu:ws:trello" },
@@ -74,9 +158,9 @@ function helpView() {
       "• \"Ingetin besok jam 8 pagi sisihin tabungan\"\n" +
       "• \"Catat: minggu depan servis motor\"\n" +
       "• /catatan & /remind — Cek daftar catatan & pengingat aktif\n\n" +
-      "4️⃣ Workspace & Knowledge Base\n" +
-      "• Pilih Trello / Notion / Superhuman Docs / KB di /menu untuk melihat daftar sumber terbaru secara live\n" +
-      "• Setelah dibuka, langsung ketik perintah natural (mis. \"pindah card ... ke In Progress\" atau \"cari di KB tentang ...\")\n\n" +
+      "4️⃣ Google Calendar, Workspace & Knowledge Base\n" +
+      "• Pilih Google Calendar / Trello / Notion / Superhuman Docs / KB di /menu untuk cek data live\n" +
+      "• Setelah dibuka, langsung ketik perintah natural (mis. \"jadwalin rapat besok 10.00-11.00\" atau \"pindah card ... ke In Progress\")\n\n" +
       "5️⃣ Saham, Ekonomi & Cari Info\n" +
       "• /saham BBCA • /ekonomi • /cari jadwal IPO terbaru\n\n" +
       "💡 Tips:\n" +
@@ -237,6 +321,7 @@ export async function handleMenuCallback({
   notionService,
   superhumanService,
   kbService,
+  calendarService,
   stepMs = 100,
   finishDelayMs = 0,
 }) {
@@ -283,10 +368,21 @@ export async function handleMenuCallback({
   }
 
   await ctx.answerCbQuery();
-  if (action === "home") return await safeEdit(ctx, homeView());
-  if (action === "help") return await safeEdit(ctx, helpView());
-
   const wsStore = workspaceStore || (pool?.query ? createWorkspaceStore(pool) : null);
+  const homeDeps = {
+    pool,
+    userId,
+    reminderStore,
+    workspaceStore: wsStore,
+    sheetsService,
+    calendarService,
+    trelloService,
+    notionService,
+    superhumanService,
+    kbService,
+  };
+  if (action === "home") return await safeEdit(ctx, await homeView(homeDeps));
+  if (action === "help") return await safeEdit(ctx, helpView());
 
   const loadView = () => {
     if (action === "summary") return summaryView(sheetsService);
@@ -302,9 +398,10 @@ export async function handleMenuCallback({
         notionService,
         superhumanService,
         kbService,
+        calendarService,
       });
     }
-    return Promise.resolve(homeView());
+    return homeView(homeDeps);
   };
 
   await runWithProgress({
@@ -331,9 +428,22 @@ export function registerMenuHandlers(bot, {
   notionService,
   superhumanService,
   kbService,
+  calendarService,
 }) {
   const sendHome = async (ctx) => {
-    const view = homeView();
+    const wsStore = workspaceStore || (pool?.query ? createWorkspaceStore(pool) : null);
+    const view = await homeView({
+      pool,
+      userId: String(ctx.from?.id || ""),
+      reminderStore,
+      workspaceStore: wsStore,
+      sheetsService,
+      calendarService,
+      trelloService,
+      notionService,
+      superhumanService,
+      kbService,
+    });
     await ctx.reply(view.text, view.extra);
   };
 
@@ -355,6 +465,7 @@ export function registerMenuHandlers(bot, {
         notionService,
         superhumanService,
         kbService,
+        calendarService,
       });
     } catch (error) {
       console.error("Menu callback error:", error);

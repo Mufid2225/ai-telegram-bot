@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { splitTelegramText, truncateCaption, formatLoadingBar, runWithProgress, buildConfirmExtra } from "../src/utils/telegram.js";
+import { splitTelegramText, truncateCaption, formatLoadingBar, runWithProgress, runWithTyping, buildConfirmExtra } from "../src/utils/telegram.js";
 
 test("buildConfirmExtra preserves money: prefix for finance drafts and uses action: prefix for workspace drafts", () => {
   const moneyKb = buildConfirmExtra({ id: "abc123", kind: "add_expenses" }).reply_markup.inline_keyboard[0];
@@ -85,4 +85,27 @@ test("runWithProgress replaces loading bar on error in edit mode", async () => {
 
   assert.equal(edits[0].text, "Loading ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒ 0%");
   assert.equal(edits.at(-1).text, "Error: Koneksi gagal");
+});
+
+test("runWithTyping sends native typing indicator and replies directly without Loading bar", async () => {
+  const actions = [];
+  const replies = [];
+  const ctx = {
+    chat: { id: 42 },
+    telegram: { sendChatAction: async (_chatId, act) => actions.push(act) },
+    reply: async (text, extra) => replies.push({ text, extra }),
+  };
+
+  const out = await runWithTyping({
+    ctx,
+    task: async () => "Halo! Ada yang bisa dibantu?",
+    getPendingAction: () => ({ id: "p1", kind: "calendar_create_event" }),
+  });
+
+  assert.equal(out, "Halo! Ada yang bisa dibantu?");
+  assert.deepEqual(actions, ["typing"]);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].text, "Halo! Ada yang bisa dibantu?");
+  assert.equal(replies.some((r) => r.text.startsWith("Loading ")), false);
+  assert.equal(replies[0].extra.reply_markup.inline_keyboard[0][0].callback_data, "action:confirm:p1");
 });

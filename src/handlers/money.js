@@ -8,7 +8,7 @@ import { getFinanceChartImage } from "../services/chart.js";
 import { tools, executeTool } from "../tools.js";
 import { formatFriendlyError } from "../utils/errors.js";
 import { buildSystemPrompt } from "../utils/soul.js";
-import { buildConfirmExtra, runWithProgress } from "../utils/telegram.js";
+import { runWithTyping } from "../utils/telegram.js";
 import { runPendingConfirmation } from "./actions.js";
 
 const MONEY_TOOL_NAMES = new Set([
@@ -90,9 +90,8 @@ export function registerMoneyHandlers(bot, { config, callAI, pool, sheetsService
     }
 
     const toolContext = { userId: String(ctx.from.id), pool, sheetsService, pendingStore, reminderStore };
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: () => callAI(
         [
           {
@@ -111,24 +110,23 @@ export function registerMoneyHandlers(bot, { config, callAI, pool, sheetsService
         ctx,
         { tools: moneyTools, executeTool, toolContext }
       ),
-      formatResult: (reply) => ({ text: reply, extra: buildConfirmExtra(toolContext.pendingAction) }),
-      formatError: (error) => {
+      getPendingAction: () => toolContext.pendingAction,
+      onError: (error) => {
         console.error("/catat error:", error);
-        return { text: formatFriendlyError(error, "memproses /catat") };
+        return formatFriendlyError(error, "memproses /catat");
       },
     });
   });
 
   bot.command("keuangan", async (ctx) => {
     const { month, year } = parseMonthYearArgs(ctx.message.text);
-    const summary = await runWithProgress({
+    const summary = await runWithTyping({
       ctx,
-      mode: "reply",
       task: () => sheetsService.getSummary({ month, year }),
-      formatResult: (data) => ({ text: formatSummaryText(data) }),
-      formatError: (error) => {
+      formatText: (data) => formatSummaryText(data),
+      onError: (error) => {
         console.error("/keuangan error:", error);
-        return { text: formatFriendlyError(error, "membaca ringkasan keuangan") };
+        return formatFriendlyError(error, "membaca ringkasan keuangan");
       },
     });
     if (!summary) return;
@@ -143,14 +141,13 @@ export function registerMoneyHandlers(bot, { config, callAI, pool, sheetsService
 
   bot.command("pengeluaran", async (ctx) => {
     const { month, year } = parseMonthYearArgs(ctx.message.text);
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: () => sheetsService.listExpenses({ month, year, limit: 15 }),
-      formatResult: (rows) => ({ text: formatExpensesList(rows, `${month} ${year}`) }),
-      formatError: (error) => {
+      formatText: (rows) => formatExpensesList(rows, `${month} ${year}`),
+      onError: (error) => {
         console.error("/pengeluaran error:", error);
-        return { text: formatFriendlyError(error, "membaca daftar pengeluaran") };
+        return formatFriendlyError(error, "membaca daftar pengeluaran");
       },
     });
   });

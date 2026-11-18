@@ -5,7 +5,7 @@ import { getHistory, getChartImage, getPeriodLabel } from "../services/chart.js"
 import { webSearch, buildSearchQuery } from "../services/search.js";
 import { formatAIHttpError, formatAINetworkError, formatFriendlyError } from "../utils/errors.js";
 import { buildSystemPrompt } from "../utils/soul.js";
-import { runWithProgress } from "../utils/telegram.js";
+import { runWithTyping } from "../utils/telegram.js";
 
 export function registerMarketHandlers(bot, { config, callAI, dateStr }) {
   bot.command("test", async (ctx) => {
@@ -28,9 +28,8 @@ export function registerMarketHandlers(bot, { config, callAI, dateStr }) {
     const rawQuery = ctx.message.text.split(" ").slice(1).join(" ");
     if (!rawQuery) return ctx.reply("🔎 Contoh: /cari IPO terbaru Indonesia 2026");
 
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: async () => {
         const searchQuery = buildSearchQuery(rawQuery);
         const searchResult = await webSearch(searchQuery, 8);
@@ -41,9 +40,9 @@ export function registerMarketHandlers(bot, { config, callAI, dateStr }) {
           { role: "user", content: rawQuery },
         ], ctx);
       },
-      formatError: (error) => {
+      onError: (error) => {
         console.error("/cari error:", error);
-        return { text: formatFriendlyError(error, "mencari info") };
+        return formatFriendlyError(error, "mencari info");
       },
     });
   });
@@ -57,9 +56,8 @@ export function registerMarketHandlers(bot, { config, callAI, dateStr }) {
       if (!["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "AMD", "INTC", "NFLX"].includes(symbol)) symbol += ".JK";
     }
 
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: async () => {
         const ticker = symbol.replace(".JK", "").replace("=F", "").replace("=X", "").replace("-USD", "");
         const [quote, news, sentiment, fundamental, ratios, earnings, rsi, topMovers, history] = await Promise.all([
@@ -84,17 +82,16 @@ export function registerMarketHandlers(bot, { config, callAI, dateStr }) {
           { role: "user", content: `Analisa ${quote.symbol} (${quote.name}) untuk trading hari ini.` },
         ], ctx);
       },
-      formatError: (error) => {
+      onError: (error) => {
         console.error("/trade error:", error);
-        return { text: formatFriendlyError(error, "menganalisa saham") };
+        return formatFriendlyError(error, "menganalisa saham");
       },
     });
   });
 
   bot.command("ekonomi", async (ctx) => {
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: async () => {
         const [news, cpi, fedRate, inflation, gdp, unemployment, treasury, retail, wti, goldSilver, topMovers] = await Promise.all([
           getMarketNews(6), alpha.getCPI(), alpha.getFedRate(), alpha.getInflation(), alpha.getGDP().catch(() => null),
@@ -118,9 +115,9 @@ export function registerMarketHandlers(bot, { config, callAI, dateStr }) {
           { role: "user", content: "Analisa data ekonomi hari ini dan dampaknya ke market." },
         ], ctx);
       },
-      formatError: (error) => {
+      onError: (error) => {
         console.error("/ekonomi error:", error);
-        return { text: formatFriendlyError(error, "mengambil data ekonomi") };
+        return formatFriendlyError(error, "mengambil data ekonomi");
       },
     });
   });

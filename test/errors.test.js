@@ -45,8 +45,12 @@ test("formatAIHttpError gives clear hints per HTTP status", () => {
   assert.match(formatAIHttpError(503, ""), /gangguan/i);
 });
 
-test("formatFriendlyError explains Google Sheets auth and config errors clearly", () => {
+test("formatFriendlyError explains Google Sheets auth, CalendarApp permission, and config errors clearly", () => {
   assert.match(formatFriendlyError(new Error("Unauthorized: secret tidak cocok."), "membaca ringkasan"), /SHEET_API_SECRET/);
   assert.match(formatFriendlyError(new Error("SHEET_WEBHOOK_URL kosong"), "membaca ringkasan"), /SHEET_WEBHOOK_URL/);
+  assert.match(
+    formatFriendlyError(new Error("Exception: You do not have permission to call CalendarApp.getDefaultCalendar"), "membaca jadwal"),
+    /authorizeCalendar/
+  );
   assert.match(formatFriendlyError(new Error("socket hang up"), "mengirim foto"), /terputus\/timeout/);
 });

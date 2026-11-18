@@ -120,6 +120,39 @@ test("workspace menu handles Notion, Superhuman Docs, KB, and expired refs safel
 
     const expired = await handleWorkspaceMenuAction({ action: "ws:r:deadbeef", userId: "123", workspaceStore });
     assert.match(expired.text, /kedaluwarsa|tidak ditemukan/i);
+
+    const calendarService = {
+      listCalendars: async () => [
+        { id: "primary", name: "Kalender Utama", isPrimary: true, isOwnedByMe: true },
+        { id: "cal_kuliah_long_id_001", name: "Jadwal Kuliah", isPrimary: false, isOwnedByMe: true },
+      ],
+      listEvents: async () => [
+        {
+          id: "ev1",
+          calendarId: "primary",
+          calendarName: "Kalender Utama",
+          title: "Bimbingan Skripsi",
+          startIso: "2026-11-19T10:00:00+07:00",
+          endIso: "2026-11-19T11:00:00+07:00",
+          isAllDay: false,
+          location: "R. Dosen",
+        },
+      ],
+    };
+
+    const calOv = await handleWorkspaceMenuAction({ action: "ws:calendar", userId: "123", workspaceStore, calendarService });
+    assertAllCallbacksSafe(calOv);
+    assert.match(calOv.text, /Google Calendar/);
+    assert.match(calOv.text, /Bimbingan Skripsi/);
+    assert.equal((await workspaceStore.getActiveContext("123")).platform, "calendar");
+
+    const pickBtn = calOv.extra.reply_markup.inline_keyboard.flat().find((b) => b.text.includes("Pilih Kalender"));
+    const calPick = await handleWorkspaceMenuAction({ action: pickBtn.callback_data.replace(/^menu:/, ""), userId: "123", workspaceStore, calendarService });
+    assertAllCallbacksSafe(calPick);
+    const subCalBtn = calPick.extra.reply_markup.inline_keyboard.flat().find((b) => b.text.includes("Jadwal Kuliah"));
+    const subCalOv = await handleWorkspaceMenuAction({ action: subCalBtn.callback_data.replace(/^menu:/, ""), userId: "123", workspaceStore, calendarService });
+    assert.match(subCalOv.text, /Jadwal Kuliah/);
+    assert.equal((await workspaceStore.getActiveContext("123")).sourceId, "cal_kuliah_long_id_001");
   } finally {
     db.end();
     await fs.rm(tmpKb, { recursive: true, force: true });

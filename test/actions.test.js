@@ -41,6 +41,10 @@ test("executeWorkspaceAction executes trello, notion, and superhuman confirmed a
         return { completed: true };
       },
     },
+    calendarService: {
+      createEvent: async (p) => ({ id: "ev1", title: p.title, calendarName: "Kalender Utama" }),
+      deleteEvent: async (p) => ({ deleted: true, eventId: p.eventId, title: p.expectedTitle }),
+    },
   };
 
   const tMsg = await executeWorkspaceAction(
@@ -64,6 +68,18 @@ test("executeWorkspaceAction executes trello, notion, and superhuman confirmed a
   assert.match(sMsg, /Task Web/);
   assert.equal(superInserted.rows, undefined);
   assert.equal(superInserted.body.rows[0].Task, "Build");
+
+  const cCreateMsg = await executeWorkspaceAction(
+    { kind: "calendar_create_event", payload: { calendarId: "primary", calendarName: "Kalender Utama", title: "Sidang TA", startIso: "2026-11-21T09:00:00+07:00", endIso: "2026-11-21T11:00:00+07:00" } },
+    services
+  );
+  assert.match(cCreateMsg, /Sidang TA/);
+
+  const cDelMsg = await executeWorkspaceAction(
+    { kind: "calendar_delete_event", payload: { calendarId: "primary", eventId: "ev1", expectedTitle: "Sidang TA" } },
+    services
+  );
+  assert.match(cDelMsg, /Sidang TA.*dihapus/i);
 });
 
 test("handleWorkspaceActionCallback confirms once, restores action buttons on error, and handles cancel", async () => {

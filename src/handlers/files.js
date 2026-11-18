@@ -5,7 +5,7 @@ import { extractTaskInfo } from "./tasks.js";
 import { tools, executeTool } from "../tools.js";
 import { formatFriendlyError } from "../utils/errors.js";
 import { buildSystemPrompt } from "../utils/soul.js";
-import { buildConfirmExtra, runWithProgress } from "../utils/telegram.js";
+import { runWithTyping } from "../utils/telegram.js";
 
 export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 export const MAX_EXTRACTED_TEXT = 30000;
@@ -30,6 +30,7 @@ export function registerFileHandlers(bot, {
   notionService,
   superhumanService,
   kbService,
+  calendarService,
   dateStr,
 }) {
   async function downloadFile(fileId) {
@@ -52,10 +53,10 @@ export function registerFileHandlers(bot, {
       notionService,
       superhumanService,
       kbService,
+      calendarService,
     };
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: async () => {
         const photo = ctx.message.photo.at(-1);
         assertFileSize(photo);
@@ -87,10 +88,10 @@ export function registerFileHandlers(bot, {
         await repository.saveConversation({ userId, role: "assistant", content: reply });
         return reply;
       },
-      formatResult: (reply) => ({ text: reply, extra: buildConfirmExtra(toolContext.pendingAction) }),
-      formatError: (error) => {
+      getPendingAction: () => toolContext.pendingAction,
+      onError: (error) => {
         console.error("Photo error:", error);
-        return { text: formatFriendlyError(error, "memproses foto") };
+        return formatFriendlyError(error, "memproses foto");
       },
     });
   });
@@ -108,10 +109,10 @@ export function registerFileHandlers(bot, {
       notionService,
       superhumanService,
       kbService,
+      calendarService,
     };
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: async () => {
         const doc = ctx.message.document;
         assertFileSize(doc);
@@ -144,10 +145,10 @@ export function registerFileHandlers(bot, {
         await repository.saveConversation({ userId, role: "assistant", content: reply });
         return reply;
       },
-      formatResult: (reply) => ({ text: reply, extra: buildConfirmExtra(toolContext.pendingAction) }),
-      formatError: (error) => {
+      getPendingAction: () => toolContext.pendingAction,
+      onError: (error) => {
         console.error("Document handler error:", error);
-        return { text: formatFriendlyError(error, "memproses file") };
+        return formatFriendlyError(error, "memproses file");
       },
     });
   });

@@ -6,13 +6,24 @@
  * 2. Hapus isi default, tempel seluruh kode ini, lalu simpan (Ctrl+S).
  * 3. Isi SHEET_API_SECRET di bawah (atau lewat Project Settings -> Script Properties: SHEET_API_SECRET)
  *    dengan nilai acak yang sama persis dengan SHEET_API_SECRET di .env.local bot.
- * 4. Klik Deploy -> New deployment -> pilih Type: Web app:
+ * 4. (Opsional untuk Google Calendar) Pilih fungsi `authorizeCalendar` di toolbar atas editor Apps Script,
+ *    klik Run, lalu klik Review permissions -> Allow.
+ * 5. Klik Deploy -> New deployment (atau Manage deployments -> Edit -> New version jika update) -> Type: Web app:
  *    - Execute as: Me
  *    - Who has access: Anyone
- * 5. Salin Web app URL (/exec) ke SHEET_WEBHOOK_URL di .env.local bot.
+ * 6. Salin Web app URL (/exec) ke SHEET_WEBHOOK_URL di .env.local bot.
  */
 
 var FALLBACK_API_SECRET = "GANTI_DENGAN_SECRET_YANG_SAMA_DENGAN_ENV";
+
+/**
+ * Jalankan fungsi ini 1x dari editor Apps Script (tombol Run) untuk mengaktifkan izin Google Sheets + Google Calendar.
+ */
+function authorizeCalendar() {
+  var cal = CalendarApp.getDefaultCalendar();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  Logger.log("Otorisasi aktif -> Sheet: " + ss.getName() + " | Calendar: " + cal.getName());
+}
 
 var MONTHS_ID = [
   "Januari", "Februari", "Maret", "April", "Mei", "Juni",
@@ -46,9 +57,15 @@ function doPost(e) {
       return jsonResponse({ ok: false, error: "Unauthorized: secret tidak cocok." });
     }
 
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var action = body.action;
+    var action = String(body.action || "");
     var data;
+
+    if (action.indexOf("calendar_") === 0) {
+      data = handleCalendarAction(action, body);
+      return jsonResponse({ ok: true, data: data });
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
 
     switch (action) {
       case "get_context":
@@ -555,4 +572,221 @@ function handleUpsertIncome(ss, params) {
   data.sheet.getRange(targetRow, monthCol).setValue(finalAmt);
 
   return { source: source, month: month, amount: finalAmt, rowNumber: targetRow };
+}
+
+// ============================================================================
+// GOOGLE CALENDAR HANDLERS
+// ============================================================================
+
+function handleCalendarAction(action, body) {
+  switch (action) {
+    case "calendar_list_calendars":
+      return handleCalendarListCalendars();
+    case "calendar_list_events":
+      return handleCalendarListEvents(body);
+    case "calendar_create_event":
+      return handleCalendarCreateEvent(body);
+    case "calendar_update_event":
+      return handleCalendarUpdateEvent(body);
+    case "calendar_delete_event":
+      return handleCalendarDeleteEvent(body);
+    default:
+      throw new Error("Action kalender tidak dikenal: " + action);
+  }
+}
+
+function resolveCalendar(calendarId, requireWritable) {
+  var id = String(calendarId || "").trim();
+  var cal = (!id || id === "primary")
+    ? CalendarApp.getDefaultCalendar()
+    : CalendarApp.getCalendarById(id);
+  if (!cal) {
+    throw new Error("Kalender tidak ditemukan: " + id);
+  }
+  if (requireWritable && !cal.isOwnedByMe() && !cal.isMyPrimaryCalendar()) {
+    throw new Error("Kalender '" + cal.getName() + "' bersifat read-only dan tidak boleh diubah.");
+  }
+  return cal;
+}
+
+function serializeCalendarEvent(ev, cal) {
+  var tz = cal.getTimeZone() || Session.getScriptTimeZone() || "Asia/Jakarta";
+  var isAllDay = ev.isAllDayEvent();
+  var startDate = isAllDay ? ev.getAllDayStartDate() : ev.getStartTime();
+  var endDate = isAllDay ? ev.getAllDayEndDate() : ev.getEndTime();
+  return {
+    id: ev.getId(),
+    calendarId: cal.isMyPrimaryCalendar() ? "primary" : cal.getId(),
+    calendarName: cal.isMyPrimaryCalendar() ? "Kalender Utama" : cal.getName(),
+    title: ev.getTitle() || "(Tanpa Judul)",
+    startIso: isAllDay
+      ? Utilities.formatDate(startDate, tz, "yyyy-MM-dd")
+      : Utilities.formatDate(startDate, tz, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    endIso: isAllDay
+      ? Utilities.formatDate(endDate, tz, "yyyy-MM-dd")
+      : Utilities.formatDate(endDate, tz, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    startMs: startDate.getTime(),
+    isAllDay: isAllDay,
+    location: ev.getLocation() || "",
+    description: ev.getDescription() || ""
+  };
+}
+
+function handleCalendarListCalendars() {
+  var all = CalendarApp.getAllCalendars();
+  var result = [];
+  for (var i = 0; i < all.length; i++) {
+    var c = all[i];
+    var isPrimary = c.isMyPrimaryCalendar();
+    result.push({
+      id: isPrimary ? "primary" : c.getId(),
+      name: isPrimary ? "Kalender Utama (" + c.getName() + ")" : c.getName(),
+      isPrimary: isPrimary,
+      isOwnedByMe: Boolean(c.isOwnedByMe() || isPrimary),
+      timeZone: c.getTimeZone()
+    });
+  }
+  result.sort(function (a, b) {
+    if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+    if (a.isOwnedByMe !== b.isOwnedByMe) return a.isOwnedByMe ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return result;
+}
+
+function handleCalendarListEvents(params) {
+  var startDate = new Date(params.startIso);
+  var endDate = new Date(params.endIso);
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate <= startDate) {
+    throw new Error("Rentang waktu startIso dan endIso tidak valid.");
+  }
+  if ((endDate.getTime() - startDate.getTime()) > 92 * 86400000) {
+    throw new Error("Rentang pembacaan jadwal maksimal 90 hari per permintaan.");
+  }
+
+  var cals = [];
+  var calId = String(params.calendarId || "").trim();
+  if (params.includeAllOwned && (!calId || calId === "primary")) {
+    var all = CalendarApp.getAllCalendars();
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].isOwnedByMe() || all[i].isMyPrimaryCalendar()) cals.push(all[i]);
+    }
+  } else {
+    cals.push(resolveCalendar(calId || "primary", false));
+  }
+
+  var q = String(params.query || "").trim().toLowerCase();
+  var limit = Math.min(Math.max(Number(params.limit) || 25, 1), 50);
+  var items = [];
+
+  for (var cIdx = 0; cIdx < cals.length; cIdx++) {
+    var cal = cals[cIdx];
+    var events = cal.getEvents(startDate, endDate);
+    for (var eIdx = 0; eIdx < events.length; eIdx++) {
+      var serialized = serializeCalendarEvent(events[eIdx], cal);
+      if (q) {
+        var hay = (serialized.title + " " + serialized.location + " " + serialized.description).toLowerCase();
+        if (hay.indexOf(q) === -1) continue;
+      }
+      items.push(serialized);
+    }
+  }
+
+  items.sort(function (a, b) { return a.startMs - b.startMs; });
+  return items.slice(0, limit).map(function (it) {
+    delete it.startMs;
+    return it;
+  });
+}
+
+function handleCalendarCreateEvent(params) {
+  var title = String(params.title || "").trim();
+  if (!title) throw new Error("Judul jadwal wajib diisi.");
+  var cal = resolveCalendar(params.calendarId || "primary", true);
+  var opts = {
+    location: String(params.location || "").trim(),
+    description: String(params.description || "").trim()
+  };
+
+  var ev;
+  if (params.isAllDay) {
+    var startDay = isoToLocalDate(params.date);
+    if (params.endDate && params.endDate !== params.date) {
+      var endDay = isoToLocalDate(params.endDate);
+      ev = cal.createAllDayEvent(title, startDay, endDay, opts);
+    } else {
+      ev = cal.createAllDayEvent(title, startDay, opts);
+    }
+  } else {
+    var start = new Date(params.startIso);
+    var end = new Date(params.endIso);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+      throw new Error("Jam mulai dan jam selesai tidak valid (jam selesai harus setelah jam mulai).");
+    }
+    ev = cal.createEvent(title, start, end, opts);
+  }
+
+  var out = serializeCalendarEvent(ev, cal);
+  delete out.startMs;
+  return out;
+}
+
+function assertExpectedCalendarEvent(ev, expectedTitle) {
+  if (!ev) throw new Error("Jadwal tidak ditemukan di Google Calendar.");
+  if (expectedTitle) {
+    var actual = String(ev.getTitle() || "").trim().toLowerCase();
+    var exp = String(expectedTitle).trim().toLowerCase();
+    if (actual !== exp) {
+      throw new Error("Jadwal di Google Calendar sudah berubah (judul sekarang: '" + ev.getTitle() + "').");
+    }
+  }
+}
+
+function handleCalendarUpdateEvent(params) {
+  var eventId = String(params.eventId || "").trim();
+  if (!eventId) throw new Error("eventId wajib diisi.");
+  var cal = resolveCalendar(params.calendarId || "primary", true);
+  var ev = cal.getEventById(eventId);
+  assertExpectedCalendarEvent(ev, params.expectedTitle);
+
+  var patch = params.patch || {};
+  if (patch.title !== undefined && String(patch.title).trim()) {
+    ev.setTitle(String(patch.title).trim());
+  }
+  if (patch.location !== undefined) {
+    ev.setLocation(String(patch.location));
+  }
+  if (patch.description !== undefined) {
+    ev.setDescription(String(patch.description));
+  }
+  if (patch.isAllDay && patch.date) {
+    var sDay = isoToLocalDate(patch.date);
+    if (patch.endDate && patch.endDate !== patch.date) {
+      ev.setAllDayDates(sDay, isoToLocalDate(patch.endDate));
+    } else {
+      ev.setAllDayDate(sDay);
+    }
+  } else if (patch.startIso && patch.endIso) {
+    var newStart = new Date(patch.startIso);
+    var newEnd = new Date(patch.endIso);
+    if (isNaN(newStart.getTime()) || isNaN(newEnd.getTime()) || newEnd <= newStart) {
+      throw new Error("Jam mulai/selesai baru tidak valid.");
+    }
+    ev.setTime(newStart, newEnd);
+  }
+
+  var out = serializeCalendarEvent(ev, cal);
+  delete out.startMs;
+  return out;
+}
+
+function handleCalendarDeleteEvent(params) {
+  var eventId = String(params.eventId || "").trim();
+  if (!eventId) throw new Error("eventId wajib diisi.");
+  var cal = resolveCalendar(params.calendarId || "primary", true);
+  var ev = cal.getEventById(eventId);
+  assertExpectedCalendarEvent(ev, params.expectedTitle);
+  var oldTitle = ev.getTitle() || "(Tanpa Judul)";
+  ev.deleteEvent();
+  return { deleted: true, eventId: eventId, title: oldTitle };
 }

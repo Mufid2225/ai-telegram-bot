@@ -7,6 +7,7 @@ import {
   formatExpensesList,
 } from "./services/money.js";
 import { workspaceTools, executeWorkspaceTool } from "./tools/workspace.js";
+import { calendarTools, executeCalendarTool } from "./tools/calendar.js";
 
 function fnTool(name, description, properties, required = []) {
   const parameters = { type: "object", properties };
@@ -200,6 +201,7 @@ export const tools = [
     ["entity"]
   ),
   ...workspaceTools,
+  ...calendarTools,
 ];
 
 function getCurrentTime(format = "full") {
@@ -398,6 +400,8 @@ export async function executeTool(name, args = {}, context = {}) {
       default: {
         const wsResult = await executeWorkspaceTool(name, args, context);
         if (wsResult !== null) return wsResult;
+        const calResult = await executeCalendarTool(name, args, context);
+        if (calResult !== null) return calResult;
         return `Unknown tool: ${name}`;
       }
     }

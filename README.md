@@ -45,8 +45,9 @@ Terhubung langsung ke Google Sheets `MoneyTracker` via Google Apps Script Web Ap
 ### 10. Catatan & Reminder Persisten
 Catatan biasa (`/catatan`), fakta user (`knowledge`), dan reminder terjadwal (`/remind`) tersimpan permanen di SQLite lokal (`data.db`) dan tidak hilang saat server restart.
 
-### 11. Workspace & Knowledge Base (`/menu` + Natural Chat)
+### 11. Google Calendar, Workspace & Knowledge Base (`/menu` + Natural Chat)
 Integrasi opsional yang dapat dipilih langsung dari `/menu` (dengan indikator loading `0% → 100%` dan konteks aktif):
+- **Google Calendar** — terhubung melalui jembatan Apps Script (`MoneyTracker.gs` + `CalendarApp`) tanpa setup OAuth/Google Cloud terpisah; lihat agenda Hari Ini / 7 Hari / 30 Hari, pilih sub-kalender, deteksi jadwal bentrok otomatis, serta tambah/geser/hapus jadwal dengan konfirmasi tombol (`Simpan` / `Batal`)
 - **Trello** — pilih board secara live, lihat ringkasan list terpaginasi, cari card, serta tambah/pindah/arsipkan card dengan tombol konfirmasi (`Simpan` / `Batal`)
 - **Notion** — pilih database/page yang terhubung ke integrasi Notion, lihat schema properti & baris terbaru, serta tambah/update/arsipkan baris dengan verifikasi baca ulang
 - **Superhuman Docs** — pilih dokumen & tabel, cek akses `write`/`read-only`, serta tambah/update baris tabel dengan polling mutasi async
@@ -252,10 +253,11 @@ Konfigurasi MoneyTracker (Google Sheets Apps Script — opsional):
 1. Buka Google Sheets `MoneyTracker` → menu **Ekstensi → Apps Script**.
 2. Salin seluruh isi `apps-script/MoneyTracker.gs` ke editor Apps Script lalu simpan.
 3. Atur `SHEET_API_SECRET` (di **Project Settings → Script Properties** atau variabel `FALLBACK_API_SECRET`) agar sama dengan nilai `SHEET_API_SECRET` di `.env.local`.
-4. Klik **Deploy → New deployment → Web app**:
+4. (Untuk Google Calendar) Pilih fungsi `authorizeCalendar` di toolbar editor Apps Script → klik **Run** → klik **Review permissions → Allow**.
+5. Klik **Deploy → New deployment** (atau **Manage deployments → Edit → New version** bila memperbarui deployment lama) → **Web app**:
    - *Execute as*: **Me**
    - *Who has access*: **Anyone**
-5. Salin URL `/exec` ke `SHEET_WEBHOOK_URL` di `.env.local`, lalu restart bot.
+6. Salin URL `/exec` ke `SHEET_WEBHOOK_URL` di `.env.local`, lalu restart bot.
 
 Konfigurasi provider opsional:
 - `ALPHA_VANTAGE_KEY`

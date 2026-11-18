@@ -13,9 +13,10 @@
 - `src/index.js`: Entry point Telegraf, inisialisasi store & service, registrasi menu command (`setMyCommands`), startup reminder poller, health check HTTP server, dan graceful shutdown.
 - `src/config.js`: Validasi env dari `.env.local` (`override: true`) + fallback otomatis ke environment OS untuk kredensial opsional (`SHEET_*`, `TRELLO_*`, `NOTION_API_KEY`, `SUPERHUMAN_API_TOKEN`, `KB_DIR`).
 - `src/database.js`: SQLite factory (`createDatabase`) & schema (`memories`, `conversations`, `knowledge`, `pending_actions`, `reminders`, `active_context`, `callback_refs`).
-- `src/tools.js` & `src/tools/workspace.js`: Definisi & eksekutor tool AI:
-  - `src/tools.js`: Tool utama (`MoneyTracker` read/propose, catatan, reminder, knowledge graph, kalkulator, waktu) + penggabungan tool workspace.
+- `src/tools.js`, `src/tools/workspace.js`, & `src/tools/calendar.js`: Definisi & eksekutor tool AI:
+  - `src/tools.js`: Tool utama (`MoneyTracker` read/propose, catatan, reminder, knowledge graph, kalkulator, waktu) + penggabungan tool workspace & kalender.
   - `src/tools/workspace.js`: 15 tool terarah untuk Trello, Notion, Superhuman Docs, dan Knowledge Base (termasuk resolusi konteks aktif & disambiguasi kandidat kembar).
+  - `src/tools/calendar.js`: 5 tool ketat untuk Google Calendar (`calendar_list_calendars`, `calendar_list_events`, `calendar_propose_create_event`, `calendar_propose_update_event`, `calendar_propose_delete_event`) dengan validasi offset ISO, deteksi bentrok jadwal, disambiguasi, dan `expectedTitle`.
 - `src/handlers/`:
   - `menu.js`: `/start` & `/menu` interaktif (Inline Keyboard in-place via `editMessageText`, tanpa Reply Keyboard) + `BOT_COMMANDS`.
   - `workspace-menu.js`: Sub-menu dinamis live untuk `📋 Trello`, `📓 Notion`, `📄 Superhuman Docs`, dan `🧠 Knowledge Base` dengan pagination & short callback refs.
@@ -29,7 +30,7 @@
   - `ai.js`: Klien OpenAI-compatible router dengan multi-step tool-calling loop, retry/backoff, dan `stripMarkdown`.
   - `pending.js`: Store SQLite `pending_actions` terpadu (klaim atomik `claimForExecution`, `superseded` draft lama, TTL).
   - `workspace.js`: Store SQLite `active_context` (target kerja terakhir per user) & `callback_refs` (hash ref 8-karakter agar `callback_data` selalu `<= 64` byte).
-  - `sheets.js` & `money.js`: Integrasi & pemformatan `MoneyTracker` Google Sheets.
+  - `sheets.js`, `calendar.js`, & `money.js`: Integrasi `MoneyTracker` Google Sheets & `Google Calendar` via shared Apps Script bridge (`apps-script/MoneyTracker.gs`).
   - `trello.js`: Klien REST Trello v1 (board/list overview terpaginasi, deteksi nama list duplikat, pencarian card, create/move/archive card).
   - `notion.js`: Klien REST Notion (`2022-06-28`, paginated search, validasi schema & opsi `select`/`status`, verifikasi baca ulang `GET` setelah tulis, archive-only).
   - `superhuman.js`: Klien REST Superhuman Docs / Coda v1 (cek ACL `write` vs `read-only`, prioritas tabel bernama, pembersihan cell kosong, polling `mutationStatus` HTTP `202`).
@@ -44,9 +45,9 @@
 - `docs/superpowers/`: Dokumen spesifikasi desain (`specs/`) dan rencana implementasi (`plans/`).
 
 ## Aturan Pengembangan, Skalabilitas & Keamanan (Repo Public)
-1. **Single Source of Truth Eksternal:** Google Sheets (`MoneyTracker`), Trello, Notion, dan Superhuman Docs adalah kebenaran utama data masing-masing. Jangan membuat tabel mirror/salinan transaksi, card, atau dokumen eksternal di SQLite lokal.
+1. **Single Source of Truth Eksternal:** Google Sheets (`MoneyTracker`), Google Calendar, Trello, Notion, dan Superhuman Docs adalah kebenaran utama data masing-masing. Jangan membuat tabel mirror/salinan transaksi, event kalender, card, atau dokumen eksternal di SQLite lokal.
 2. **Konfirmasi Wajib & Operasi Non-Destruktif:**
-   - Semua operasi tulis/edit/arsip ke Google Sheets, Trello, Notion, dan Superhuman Docs wajib melewati `pending_actions` (SQLite) dan konfirmasi tombol inline (`✅ Simpan` / `❌ Batal`), hanya untuk `ALLOWED_USER_ID`.
+   - Semua operasi tulis/edit/hapus/arsip ke Google Sheets, Google Calendar, Trello, Notion, dan Superhuman Docs wajib melewati `pending_actions` (SQLite) dan konfirmasi tombol inline (`✅ Simpan` / `❌ Batal`), hanya untuk `ALLOWED_USER_ID`.
    - Jangan pernah melakukan penghapusan permanen (`DELETE`) ke API Trello atau Notion; gunakan pengarsipan (`closed: true` / `archived: true`).
    - Layanan `kb.js` wajib selalu **read-only** dan memvalidasi bahwa target berada di dalam `realpath(KB_DIR)`.
 3. **Skalabilitas & Batas Platform Telegram:**

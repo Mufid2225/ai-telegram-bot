@@ -74,6 +74,12 @@ export function formatFriendlyError(error, contextLabel = "memproses permintaan"
   const raw = redactSecrets(error?.message || error?.code || String(error));
   const lower = raw.toLowerCase();
 
+  if (lower.includes("calendarapp") || (lower.includes("permission") && lower.includes("calendar"))) {
+    return (
+      "🔐 Google Calendar belum diberi izin di Apps Script.\n" +
+      "Buka editor Apps Script MoneyTracker -> jalankan fungsi authorizeCalendar sekali (klik Allow) -> Deploy -> Manage deployments -> Edit -> pilih New version."
+    );
+  }
   if (lower.includes("sheet_webhook_url") || lower.includes("belum dikonfigurasi")) {
     return "⚙️ Google Sheets belum terhubung. Lengkapi SHEET_WEBHOOK_URL dan SHEET_API_SECRET di .env.local dulu ya.";
   }

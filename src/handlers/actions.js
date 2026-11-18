@@ -131,6 +131,18 @@ export async function executeWorkspaceAction(action, services = {}) {
     const note = res.completed ? "selesai diperbarui" : `dalam antrean async (requestId: ${res.requestId})`;
     return `Baris "${payload.rowName || payload.rowId}" di Superhuman Docs "${payload.tableName}" ${note}.`;
   }
+  if (kind === "calendar_create_event") {
+    const ev = await requireService(services.calendarService, "Google Calendar").createEvent(payload);
+    return `Jadwal "${ev.title || payload.title}" berhasil disimpan ke Google Calendar (${ev.calendarName || payload.calendarName}).`;
+  }
+  if (kind === "calendar_update_event") {
+    const ev = await requireService(services.calendarService, "Google Calendar").updateEvent(payload);
+    return `Jadwal "${ev.title || payload.expectedTitle}" berhasil diperbarui di Google Calendar.`;
+  }
+  if (kind === "calendar_delete_event") {
+    const res = await requireService(services.calendarService, "Google Calendar").deleteEvent(payload);
+    return `Jadwal "${res.title || payload.expectedTitle}" berhasil dihapus dari Google Calendar.`;
+  }
 
   throw new Error(`Aksi workspace tidak dikenal: ${kind}`);
 }
@@ -158,8 +170,8 @@ export async function handleWorkspaceActionCallback({
   });
 }
 
-export function registerActionHandlers(bot, { config, pendingStore, trelloService, notionService, superhumanService }) {
-  const services = { trelloService, notionService, superhumanService };
+export function registerActionHandlers(bot, { config, pendingStore, trelloService, notionService, superhumanService, calendarService }) {
+  const services = { trelloService, notionService, superhumanService, calendarService };
   bot.action(/^action:(confirm|cancel):([a-f0-9]+)$/, async (ctx) => {
     const [, actionType, actionId] = ctx.match;
     try {

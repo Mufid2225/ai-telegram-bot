@@ -6,6 +6,7 @@ import pool, { cleanupConversations } from "./database.js";
 import { createRepository } from "./repository.js";
 import { createAIService } from "./services/ai.js";
 import { createSheetsService } from "./services/sheets.js";
+import { createCalendarService } from "./services/calendar.js";
 import { createPendingActionsStore } from "./services/pending.js";
 import { createWorkspaceStore } from "./services/workspace.js";
 import { createTrelloService } from "./services/trello.js";
@@ -33,6 +34,7 @@ const bot = new Telegraf(config.botToken, {
 const repository = createRepository(pool);
 const callAI = createAIService(config);
 const sheetsService = createSheetsService(config);
+const calendarService = createCalendarService(config);
 const pendingStore = createPendingActionsStore(pool);
 const workspaceStore = createWorkspaceStore(pool);
 const trelloService = createTrelloService(config);
@@ -49,11 +51,11 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-const workspaceDeps = { workspaceStore, trelloService, notionService, superhumanService, kbService };
+const workspaceDeps = { workspaceStore, trelloService, notionService, superhumanService, kbService, calendarService };
 registerTaskHandlers(bot, { pool, reminderStore });
 registerMarketHandlers(bot, { config, callAI, dateStr });
 registerMoneyHandlers(bot, { config, callAI, pool, sheetsService, pendingStore, reminderStore, dateStr });
-registerActionHandlers(bot, { config, pendingStore, trelloService, notionService, superhumanService });
+registerActionHandlers(bot, { config, pendingStore, trelloService, notionService, superhumanService, calendarService });
 registerMenuHandlers(bot, { config, pool, sheetsService, reminderStore, ...workspaceDeps });
 registerFileHandlers(bot, { callAI, repository, pool, sheetsService, pendingStore, reminderStore, ...workspaceDeps, dateStr });
 registerMessageHandlers(bot, { pool, callAI, repository, sheetsService, pendingStore, reminderStore, ...workspaceDeps, dateStr });

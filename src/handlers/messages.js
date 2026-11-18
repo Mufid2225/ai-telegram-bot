@@ -7,7 +7,7 @@ import { webSearch, detectSearchNeeded, buildSearchQuery } from "../services/sea
 import { tools, executeTool } from "../tools.js";
 import { formatFriendlyError } from "../utils/errors.js";
 import { buildSystemPrompt } from "../utils/soul.js";
-import { buildConfirmExtra, runWithProgress } from "../utils/telegram.js";
+import { runWithTyping } from "../utils/telegram.js";
 
 export function registerMessageHandlers(bot, {
   pool,
@@ -21,6 +21,7 @@ export function registerMessageHandlers(bot, {
   notionService,
   superhumanService,
   kbService,
+  calendarService,
   dateStr,
 }) {
   bot.on("text", async (ctx) => {
@@ -37,11 +38,11 @@ export function registerMessageHandlers(bot, {
       notionService,
       superhumanService,
       kbService,
+      calendarService,
     };
 
-    await runWithProgress({
+    await runWithTyping({
       ctx,
-      mode: "reply",
       task: async () => {
         const convResult = await pool.query(
           "SELECT role, content FROM conversations WHERE user_id = $1 ORDER BY id DESC LIMIT 10",
@@ -127,6 +128,7 @@ export function registerMessageHandlers(bot, {
                 `- MoneyTracker (Google Sheets) adalah sumber utama data keuangan.\n` +
                 `- Setiap user bertanya soal budget, saldo, pengeluaran, rencana/simulasi pembagian uang (mis. bagi budget 4 minggu), WAJIB panggil money_get_summary / money_list_expenses dulu agar jawabannya akurat sesuai data spreadsheet terbaru, lalu hitung pakai calculate bila perlu. JANGAN buat draft transaksi jika user hanya bertanya atau simulasi rencana.\n` +
                 `- Jika user jelas meminta mencatat, mengedit, atau menghapus transaksi/income (atau mengoreksi draft sebelumnya), panggil money_get_options (dan money_list_expenses jika edit/hapus) lalu panggil money_propose_* supaya muncul tombol Simpan/Batal.\n` +
+                `- Untuk Google Calendar, panggil get_current_time lalu calendar_list_events saat mengecek jadwal/waktu kosong. JANGAN buat draft jadwal jika user hanya bertanya ketersediaan. Jika user minta tambah/ubah/hapus jadwal tapi tanggal atau jam mulai belum jelas, tanyakan dulu tanpa menebak. Semua mutasi jadwal WAJIB memakai calendar_propose_* agar muncul tombol Simpan/Batal.\n` +
                 `- Untuk Trello, Notion, Superhuman Docs, dan Knowledge Base (read-only), panggil tool pencarian/baca secara terarah (trello_search_cards, notion_query_database, superhuman_query_table, kb_search, kb_read_note); jangan menebak ID atau membaca seluruh board sekaligus.\n` +
                 `- Semua penulisan/edit/arsip ke Trello, Notion, atau Superhuman Docs WAJIB melalui *_propose_* agar muncul tombol Simpan/Batal. Jika ada >1 kandidat atau nama list duplikat, tanyakan ke user sebelum membuat draft.\n` +
                 `- Untuk catatan biasa, fakta preferensi user, atau reminder di luar spreadsheet, gunakan save_note / list_notes / remember / recall / save_reminder / list_reminders (panggil get_current_time dulu bila perlu menghitung waktu relatif).\n\n` +
@@ -142,10 +144,10 @@ export function registerMessageHandlers(bot, {
         await repository.saveConversation({ userId, role: "assistant", content: reply });
         return reply;
       },
-      formatResult: (reply) => ({ text: reply, extra: buildConfirmExtra(toolContext.pendingAction) }),
-      formatError: (error) => {
+      getPendingAction: () => toolContext.pendingAction,
+      onError: (error) => {
         console.error("Text handler error:", error);
-        return { text: formatFriendlyError(error, "memproses pesan") };
+        return formatFriendlyError(error, "memproses pesan");
       },
     });
   });
