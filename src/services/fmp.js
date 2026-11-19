@@ -1,4 +1,9 @@
+import { createTtlCache } from "../utils/cache.js";
+
 const BASE = "https://financialmodelingprep.com/stable";
+
+const cache = createTtlCache();
+const cached = (key, ttlMs, fn) => cache.wrap(key, ttlMs, fn);
 
 async function get(endpoint) {
   const key = process.env.FMP_API_KEY;
@@ -13,7 +18,7 @@ async function get(endpoint) {
 }
 
 export async function getProfile(symbol) {
-  const data = await get(`/profile?symbol=${symbol}`);
+  const data = await cached(`profile:${symbol}`, 86_400_000, () => get(`/profile?symbol=${encodeURIComponent(symbol)}`));
   if (!data?.[0]?.symbol) return null;
   const p = data[0];
   return {
@@ -36,7 +41,7 @@ export async function getProfile(symbol) {
 }
 
 export async function getFinancialRatios(symbol) {
-  const data = await get(`/ratios-ttm?symbol=${symbol}`);
+  const data = await cached(`ratios:${symbol}`, 86_400_000, () => get(`/ratios-ttm?symbol=${encodeURIComponent(symbol)}`));
   if (!data?.[0]?.symbol) return null;
   const r = data[0];
   return {
@@ -59,7 +64,7 @@ export async function getFinancialRatios(symbol) {
 }
 
 export async function getQuote(symbol) {
-  const data = await get(`/quote?symbol=${symbol}`);
+  const data = await cached(`quote:${symbol}`, 60_000, () => get(`/quote?symbol=${encodeURIComponent(symbol)}`));
   if (!data?.[0]?.symbol) return null;
   const q = data[0];
   return {
@@ -75,16 +80,19 @@ export async function getQuote(symbol) {
 }
 
 export function formatFundamentals(profile, ratios) {
-  if (!profile) return "";
-  let ctx = `\nFundamental ${profile.name} (${profile.symbol}):\n`;
-  ctx += `Sektor: ${profile.sector} | Industri: ${profile.industry}\n`;
-  ctx += `Exchange: ${profile.exchange}\n`;
-  const mc = profile.marketCap;
-  const mcStr = mc >= 1e12 ? `$${(mc / 1e12).toFixed(2)}T` : mc >= 1e9 ? `$${(mc / 1e9).toFixed(2)}B` : `$${(mc / 1e6).toFixed(2)}M`;
-  ctx += `Market Cap: ${mcStr}\n`;
-  ctx += `Beta: ${profile.beta} | CEO: ${profile.ceo}\n`;
-  ctx += `Range 52w: ${profile.range52}\n`;
-  if (profile.lastDividend) ctx += `Dividend: $${profile.lastDividend}/sh\n`;
+  if (!profile && !ratios) return "";
+  let ctx = "";
+  if (profile) {
+    ctx += `\nFundamental ${profile.name} (${profile.symbol}):\n`;
+    ctx += `Sektor: ${profile.sector} | Industri: ${profile.industry}\n`;
+    ctx += `Exchange: ${profile.exchange}\n`;
+    const mc = profile.marketCap;
+    const mcStr = mc >= 1e12 ? `$${(mc / 1e12).toFixed(2)}T` : mc >= 1e9 ? `$${(mc / 1e9).toFixed(2)}B` : `$${(mc / 1e6).toFixed(2)}M`;
+    ctx += `Market Cap: ${mcStr}\n`;
+    ctx += `Beta: ${profile.beta} | CEO: ${profile.ceo}\n`;
+    ctx += `Range 52w: ${profile.range52}\n`;
+    if (profile.lastDividend) ctx += `Dividend: $${profile.lastDividend}/sh\n`;
+  }
 
   if (ratios) {
     if (ratios.pe) ctx += `PE: ${ratios.pe.toFixed(2)}\n`;

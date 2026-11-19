@@ -74,6 +74,12 @@ function initSchema(db) {
       payload_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS input_requests (
+      user_id TEXT PRIMARY KEY,
+      tool TEXT NOT NULL,
+      prompt_message_id INTEGER,
+      expires_at INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_conversations_user_id_id ON conversations(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_memories_user_id_type_id ON memories(user_id, type, id);
     CREATE INDEX IF NOT EXISTS idx_knowledge_user_id_id ON knowledge(user_id, id);

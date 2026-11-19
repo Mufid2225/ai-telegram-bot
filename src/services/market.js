@@ -1,6 +1,20 @@
 import YahooFinance from "yahoo-finance2";
+import { createTtlCache } from "../utils/cache.js";
 
 const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
+const cache = createTtlCache();
+const cached = (key, ttlMs, fn) => cache.wrap(key, ttlMs, fn);
+
+// yahoo-finance2 tidak punya timeout aplikasi (undici default ~300s); batasi ~15 detik.
+// Resolve null saat timeout agar caller mengembalikan null (null tidak di-cache).
+export function withTimeout(promise, ms = 15_000) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 const SYMBOL_MAP = {
   xauusd: "GC=F",
@@ -90,26 +104,32 @@ export function formatQuote(r) {
 }
 
 export async function getQuote(symbol) {
-  try {
-    const r = await yf.quote(symbol);
-    return formatQuote(r);
-  } catch {
-    return null;
-  }
+  return cached(`quote:${symbol}`, 60_000, async () => {
+    try {
+      const r = await withTimeout(yf.quote(symbol));
+      return formatQuote(r);
+    } catch {
+      return null;
+    }
+  });
 }
 
 export async function getNews(query, count = 5) {
-  try {
-    const r = await yf.search(query, { newsCount: count });
-    return (r.news || []).map((n) => ({
-      title: n.title,
-      publisher: n.publisher,
-      summary: n.summary,
-      link: n.link,
-    }));
-  } catch {
-    return [];
-  }
+  const news = await cached(`news:${count}:${query}`, 600_000, async () => {
+    try {
+      const r = await withTimeout(yf.search(query, { newsCount: count }));
+      const items = (r?.news || []).map((n) => ({
+        title: n.title,
+        publisher: n.publisher,
+        summary: n.summary,
+        link: n.link,
+      }));
+      return items.length ? items : null;
+    } catch {
+      return null;
+    }
+  });
+  return news ?? [];
 }
 
 export async function getMarketNews(count = 6) {

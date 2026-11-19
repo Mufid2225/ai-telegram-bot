@@ -8,6 +8,9 @@ import {
 } from "./services/money.js";
 import { workspaceTools, executeWorkspaceTool } from "./tools/workspace.js";
 import { calendarTools, executeCalendarTool } from "./tools/calendar.js";
+import { researchTools, executeResearchTool } from "./tools/research.js";
+import { infoTools, executeInfoTool } from "./tools/info.js";
+import { redactSecrets } from "./utils/errors.js";
 
 function fnTool(name, description, properties, required = []) {
   const parameters = { type: "object", properties };
@@ -202,6 +205,8 @@ export const tools = [
   ),
   ...workspaceTools,
   ...calendarTools,
+  ...researchTools,
+  ...infoTools,
 ];
 
 function getCurrentTime(format = "full") {
@@ -402,10 +407,14 @@ export async function executeTool(name, args = {}, context = {}) {
         if (wsResult !== null) return wsResult;
         const calResult = await executeCalendarTool(name, args, context);
         if (calResult !== null) return calResult;
+        const researchResult = await executeResearchTool(name, args);
+        if (researchResult !== null) return researchResult;
+        const infoResult = await executeInfoTool(name, args);
+        if (infoResult !== null) return infoResult;
         return `Unknown tool: ${name}`;
       }
     }
   } catch (err) {
-    return `Error: ${err.message}`;
+    return `Error: ${redactSecrets(err.message)}`;
   }
 }

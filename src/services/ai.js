@@ -1,4 +1,4 @@
-import { formatAIHttpError, formatAINetworkError } from "../utils/errors.js";
+import { formatAIHttpError, formatAINetworkError, redactSecrets } from "../utils/errors.js";
 
 export function stripMarkdown(text) {
   return text.replace(/\*{1,2}([^*]*)\*{1,2}/g, "$1").replace(/`{1,3}([^`]*)`{1,3}/g, "$1");
@@ -60,7 +60,7 @@ async function runToolCall(tc, executeTool, toolContext) {
     const out = await executeTool(tc.function?.name, args, toolContext);
     return typeof out === "string" ? out : JSON.stringify(out);
   } catch (err) {
-    return `Error: ${err.message}`;
+    return `Error: ${redactSecrets(err.message)}`;
   }
 }
 

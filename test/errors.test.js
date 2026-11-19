@@ -20,6 +20,29 @@ test("redactSecrets hides bot tokens, bearer keys, Apps Script URLs, Trello quer
   assert.match(clean, /\[REDACTED\]/);
 });
 
+test("redactSecrets hides api_key and apiKey query params (SerpAPI, NewsAPI, Alpha Vantage)", () => {
+  const dirty = [
+    "https://serpapi.com/search?q=tes&api_key=serp123secret&engine=google",
+    "https://newsapi.org/v2/everything?q=tes&apiKey=news456secret&language=id",
+    "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=TEST&apikey=alpha789secret",
+  ].join(" ");
+  const clean = redactSecrets(dirty);
+  assert.equal(clean.includes("serp123secret"), false);
+  assert.equal(clean.includes("news456secret"), false);
+  assert.equal(clean.includes("alpha789secret"), false);
+  assert.match(clean, /api_key=\[REDACTED\]/);
+  assert.match(clean, /apiKey=\[REDACTED\]/);
+  assert.match(clean, /apikey=\[REDACTED\]/);
+});
+
+test("redactSecrets hides ExchangeRate-API key embedded in the URL path", () => {
+  const dummyKey = ["dummy", "Key123456"].join("");
+  const dirty = `request to https://v6.exchangerate-api.com/v6/${dummyKey}/latest/USD failed`;
+  const clean = redactSecrets(dirty);
+  assert.equal(clean.includes(dummyKey), false);
+  assert.match(clean, /\/v6\/\[REDACTED\]\/latest\/USD/);
+});
+
 test("requestJson scrubs network errors and attaches status on HTTP failure", async () => {
   await assert.rejects(
     () => requestJson("https://api.trello.com/1/members/me/boards?key=mykey12&token=mytok123", {}, {

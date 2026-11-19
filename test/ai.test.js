@@ -103,6 +103,44 @@ test("callAI handles malformed tool arguments and enforces maxSteps", async () =
   assert.match(reply, /batas langkah|terlalu banyak/i);
 });
 
+test("callAI redacts secrets from tool execution errors before feeding them back to the model", async () => {
+  let turn = 0;
+  const payloads = [];
+  const callAI = createAIService(cfg, async (_url, init) => {
+    payloads.push(JSON.parse(init.body));
+    turn++;
+    if (turn === 1) {
+      return new Response(JSON.stringify({
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: "call_err", type: "function", function: { name: "boom", arguments: "{}" } }],
+          },
+        }],
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Selesai." } }],
+    }), { status: 200 });
+  });
+
+  const reply = await callAI([{ role: "user", content: "x" }], fakeCtx, {
+    tools: [{ type: "function", function: { name: "boom", parameters: { type: "object" } } }],
+    executeTool: async () => {
+      throw new Error("upstream failed https://api.example.com/v1?key=rahasia123456 Bearer tokentestabc");
+    },
+  });
+
+  assert.equal(reply, "Selesai.");
+  const toolMsg = payloads[1].messages.at(-1);
+  assert.equal(toolMsg.role, "tool");
+  assert.match(toolMsg.content, /^Error: /);
+  assert.match(toolMsg.content, /\[REDACTED\]/);
+  assert.doesNotMatch(toolMsg.content, /rahasia123456|tokentestabc/);
+});
+
 test("callAI returns informative Indonesian errors on 401, 429, and network failures", async () => {
   const err401 = createAIService(cfg, async () => new Response(
     JSON.stringify({ error: { message: "Invalid gateway API key." } }),

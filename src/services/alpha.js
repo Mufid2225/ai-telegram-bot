@@ -1,4 +1,9 @@
+import { createTtlCache } from "../utils/cache.js";
+
 const BASE = "https://www.alphavantage.co/query";
+
+const cache = createTtlCache();
+const cached = (key, ttlMs, fn) => cache.wrap(key, ttlMs, fn);
 
 async function fetchJson(params) {
   const key = process.env.ALPHA_VANTAGE_KEY;
@@ -58,7 +63,7 @@ function formatMarketCap(n) {
 }
 
 export async function getQuote(symbol) {
-  const data = await fetchJson({ function: "GLOBAL_QUOTE", symbol });
+  const data = await cached(`quote:${symbol}`, 60_000, () => fetchJson({ function: "GLOBAL_QUOTE", symbol }));
   if (!data?.["Global Quote"]) return null;
   const q = data["Global Quote"];
   return {
@@ -77,7 +82,7 @@ export async function getNewsSentiment({ tickers = [], topics = [], limit = 5 } 
   const params = { function: "NEWS_SENTIMENT", limit };
   if (tickers.length) params.tickers = tickers.join(",");
   if (topics.length) params.topics = topics.join(",");
-  const data = await fetchJson(params);
+  const data = await cached(`sentiment:${JSON.stringify(tickers)}:${JSON.stringify(topics)}:${limit}`, 900_000, () => fetchJson(params));
   if (!data?.feed) return [];
   return data.feed.slice(0, limit).map((item) => ({
     title: item.title,
@@ -96,7 +101,7 @@ export async function getNewsSentiment({ tickers = [], topics = [], limit = 5 } 
 }
 
 export async function getCompanyOverview(symbol) {
-  const data = await fetchJson({ function: "COMPANY_OVERVIEW", symbol });
+  const data = await cached(`overview:${symbol}`, 86_400_000, () => fetchJson({ function: "COMPANY_OVERVIEW", symbol }));
   if (!data?.Symbol) return null;
   return {
     symbol: data.Symbol, name: data.Name, description: data.Description,
@@ -120,7 +125,7 @@ export async function getCompanyOverview(symbol) {
 }
 
 export async function getEarnings(symbol) {
-  const data = await fetchJson({ function: "EARNINGS", symbol });
+  const data = await cached(`earnings:${symbol}`, 86_400_000, () => fetchJson({ function: "EARNINGS", symbol }));
   if (!data) return null;
   return {
     quarterly: (data.quarterlyEarnings || []).slice(0, 4).map(e => ({
@@ -137,7 +142,7 @@ export async function getEarnings(symbol) {
 }
 
 export async function getTopGainersLosers() {
-  const data = await fetchJson({ function: "TOP_GAINERS_LOSERS" });
+  const data = await cached("topMovers", 300_000, () => fetchJson({ function: "TOP_GAINERS_LOSERS" }));
   if (!data) return null;
   const map = i => ({
     ticker: i.ticker, price: parseFloat(i.price),
@@ -153,7 +158,7 @@ export async function getTopGainersLosers() {
 }
 
 export async function getInsiderTransactions(symbol) {
-  const data = await fetchJson({ function: "INSIDER_TRANSACTIONS", symbol });
+  const data = await cached(`insider:${symbol}`, 21_600_000, () => fetchJson({ function: "INSIDER_TRANSACTIONS", symbol }));
   if (!data?.data) return [];
   return data.data.slice(0, 10).map(t => ({
     symbol: t.symbol, filingDate: t.filing_date,
@@ -163,7 +168,7 @@ export async function getInsiderTransactions(symbol) {
 }
 
 export async function searchSymbol(keywords) {
-  const data = await fetchJson({ function: "SYMBOL_SEARCH", keywords });
+  const data = await cached(`symbolSearch:${keywords}`, 86_400_000, () => fetchJson({ function: "SYMBOL_SEARCH", keywords }));
   if (!data?.bestMatches) return [];
   return data.bestMatches.map(m => ({
     symbol: m["1. symbol"], name: m["2. name"],
@@ -172,7 +177,7 @@ export async function searchSymbol(keywords) {
 }
 
 export async function getMarketStatus() {
-  const data = await fetchJson({ function: "MARKET_STATUS" });
+  const data = await cached("marketStatus", 300_000, () => fetchJson({ function: "MARKET_STATUS" }));
   if (!data?.markets) return [];
   return data.markets.map(m => ({
     region: m.region, exchange: m.primary_exchanges,
@@ -181,7 +186,7 @@ export async function getMarketStatus() {
 }
 
 export async function getEconomicIndicator(indicator) {
-  const data = await fetchJson({ function: indicator });
+  const data = await cached(`indicator:${indicator}`, 21_600_000, () => fetchJson({ function: indicator }));
   if (!data?.data) return [];
   return data.data.slice(0, 12);
 }
@@ -197,7 +202,8 @@ export async function getUnemployment() { return getEconomicIndicator("UNEMPLOYM
 export async function getNonfarmPayroll() { return getEconomicIndicator("NONFARM_PAYROLL"); }
 
 export async function getCommodity(type) {
-  return extractDataArray(await fetchJson({ function: type }));
+  const data = await cached(`commodity:${type}`, 300_000, () => fetchJson({ function: type }));
+  return extractDataArray(data);
 }
 export const getWTI = () => getCommodity("WTI");
 export const getBrent = () => getCommodity("BRENT");
@@ -212,7 +218,7 @@ export const getCoffee = () => getCommodity("COFFEE");
 export const getAllCommodities = () => getCommodity("ALL_COMMODITIES");
 
 export async function getGoldSilverSpot() {
-  const data = await fetchJson({ function: "GOLD_SILVER_SPOT" });
+  const data = await cached("goldSilverSpot", 300_000, () => fetchJson({ function: "GOLD_SILVER_SPOT" }));
   if (!data?.data) return [];
   return data.data.map(d => ({
     date: d.date,
@@ -234,26 +240,31 @@ export async function getGoldSilverHistory(range = "5y") {
 }
 
 export async function getIntraday(symbol, interval = "60min", outputsize = "compact") {
-  return extractTimeSeries(await fetchJson({ function: "TIME_SERIES_INTRADAY", symbol, interval, outputsize }));
+  const data = await cached(`intraday:${symbol}:${interval}:${outputsize}`, 900_000, () => fetchJson({ function: "TIME_SERIES_INTRADAY", symbol, interval, outputsize }));
+  return extractTimeSeries(data);
 }
 
 export async function getDaily(symbol, outputsize = "compact") {
-  return extractTimeSeries(await fetchJson({ function: "TIME_SERIES_DAILY", symbol, outputsize }));
+  const data = await cached(`daily:${symbol}:${outputsize}`, 900_000, () => fetchJson({ function: "TIME_SERIES_DAILY", symbol, outputsize }));
+  return extractTimeSeries(data);
 }
 
 export async function getWeekly(symbol) {
-  return extractTimeSeries(await fetchJson({ function: "TIME_SERIES_WEEKLY", symbol }));
+  const data = await cached(`weekly:${symbol}`, 900_000, () => fetchJson({ function: "TIME_SERIES_WEEKLY", symbol }));
+  return extractTimeSeries(data);
 }
 
 export async function getMonthly(symbol) {
-  return extractTimeSeries(await fetchJson({ function: "TIME_SERIES_MONTHLY", symbol }));
+  const data = await cached(`monthly:${symbol}`, 900_000, () => fetchJson({ function: "TIME_SERIES_MONTHLY", symbol }));
+  return extractTimeSeries(data);
 }
 
 export async function getTechnicalIndicator(indicator, symbol, interval = "daily", timePeriod = 14, seriesType = "close") {
   const params = { function: indicator, symbol, interval };
   if (timePeriod) params.time_period = timePeriod;
   if (seriesType) params.series_type = seriesType;
-  return extractTechnicalAnalysis(await fetchJson(params));
+  const data = await cached(`technical:${indicator}:${symbol}:${interval}:${timePeriod}:${seriesType}`, 900_000, () => fetchJson(params));
+  return extractTechnicalAnalysis(data);
 }
 export const getRSI = (s, i, p) => getTechnicalIndicator("RSI", s, i, p);
 export const getSMA = (s, i, p) => getTechnicalIndicator("SMA", s, i, p);
@@ -272,14 +283,16 @@ export const getMFI = (s, i, p) => getTechnicalIndicator("MFI", s, i, p);
 export const getSAR = (s, i) => getTechnicalIndicator("SAR", s, i);
 
 export async function getForexIntraday(from, to, interval = "60min") {
-  return extractTimeSeries(await fetchJson({ function: "FX_INTRADAY", from_symbol: from, to_symbol: to, interval }));
+  const data = await cached(`fxIntraday:${from}:${to}:${interval}`, 900_000, () => fetchJson({ function: "FX_INTRADAY", from_symbol: from, to_symbol: to, interval }));
+  return extractTimeSeries(data);
 }
 export async function getForexDaily(from, to) {
-  return extractTimeSeries(await fetchJson({ function: "FX_DAILY", from_symbol: from, to_symbol: to }));
+  const data = await cached(`fxDaily:${from}:${to}`, 900_000, () => fetchJson({ function: "FX_DAILY", from_symbol: from, to_symbol: to }));
+  return extractTimeSeries(data);
 }
 
 export async function getCryptoExchangeRate(from, to) {
-  const data = await fetchJson({ function: "CURRENCY_EXCHANGE_RATE", from_currency: from, to_currency: to });
+  const data = await cached(`cryptoRate:${from}:${to}`, 300_000, () => fetchJson({ function: "CURRENCY_EXCHANGE_RATE", from_currency: from, to_currency: to }));
   if (!data?.["Realtime Currency Exchange Rate"]) return null;
   const r = data["Realtime Currency Exchange Rate"];
   return {
@@ -291,7 +304,8 @@ export async function getCryptoExchangeRate(from, to) {
 }
 
 export async function getCryptoDaily(symbol) {
-  return extractTimeSeries(await fetchJson({ function: "DIGITAL_CURRENCY_DAILY", symbol, market: "USD" }));
+  const data = await cached(`cryptoDaily:${symbol}`, 300_000, () => fetchJson({ function: "DIGITAL_CURRENCY_DAILY", symbol, market: "USD" }));
+  return extractTimeSeries(data);
 }
 
 export function formatSentiment(news) {

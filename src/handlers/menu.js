@@ -6,6 +6,7 @@ import { runWithProgress } from "../utils/telegram.js";
 import { sendFinanceChart } from "./money.js";
 import { createWorkspaceStore } from "../services/workspace.js";
 import { handleWorkspaceMenuAction } from "./workspace-menu.js";
+import { infoKeyboard, handleInfoMenuCallback } from "./info-menu.js";
 
 const PAGE_SIZE = 8;
 
@@ -40,6 +41,37 @@ function formatNowHeader(now = new Date()) {
   const hh = String(now.getHours()).padStart(2, "0");
   const mm = String(now.getMinutes()).padStart(2, "0");
   return `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()} • ${hh}.${mm} WIB`;
+}
+
+export function homeKeyboard() {
+  return [
+    [
+      { text: "💰 Ringkasan Keuangan", callback_data: "menu:summary" },
+      { text: "🧾 Pengeluaran Terbaru", callback_data: "menu:expenses:0" },
+    ],
+    [
+      { text: "📝 Catatan & Tugas", callback_data: "menu:notes" },
+      { text: "⏰ Reminder Aktif", callback_data: "menu:reminders" },
+    ],
+    [
+      { text: "📅 Google Calendar", callback_data: "menu:ws:calendar" },
+    ],
+    [
+      { text: "📋 Trello", callback_data: "menu:ws:trello" },
+      { text: "📓 Notion", callback_data: "menu:ws:notion" },
+    ],
+    [
+      { text: "📄 Superhuman Docs", callback_data: "menu:ws:superhuman" },
+      { text: "🧠 Knowledge Base", callback_data: "menu:ws:kb" },
+    ],
+    [
+      { text: "➡️ Info & Riset", callback_data: "menu:page:info" },
+    ],
+    [
+      { text: "📖 Panduan Pakai", callback_data: "menu:help" },
+      { text: "✖️ Tutup", callback_data: "menu:close" },
+    ],
+  ];
 }
 
 async function homeView({
@@ -112,31 +144,7 @@ async function homeView({
       `• Pilih tombol di bawah untuk jelajahi data live:`,
     extra: {
       reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "💰 Ringkasan Keuangan", callback_data: "menu:summary" },
-            { text: "🧾 Pengeluaran Terbaru", callback_data: "menu:expenses:0" },
-          ],
-          [
-            { text: "📝 Catatan & Tugas", callback_data: "menu:notes" },
-            { text: "⏰ Reminder Aktif", callback_data: "menu:reminders" },
-          ],
-          [
-            { text: "📅 Google Calendar", callback_data: "menu:ws:calendar" },
-          ],
-          [
-            { text: "📋 Trello", callback_data: "menu:ws:trello" },
-            { text: "📓 Notion", callback_data: "menu:ws:notion" },
-          ],
-          [
-            { text: "📄 Superhuman Docs", callback_data: "menu:ws:superhuman" },
-            { text: "🧠 Knowledge Base", callback_data: "menu:ws:kb" },
-          ],
-          [
-            { text: "📖 Panduan Pakai", callback_data: "menu:help" },
-            { text: "✖️ Tutup", callback_data: "menu:close" },
-          ],
-        ],
+        inline_keyboard: homeKeyboard(),
       },
     },
   };
@@ -162,7 +170,8 @@ function helpView() {
       "• Pilih Google Calendar / Trello / Notion / Superhuman Docs / KB di /menu untuk cek data live\n" +
       "• Setelah dibuka, langsung ketik perintah natural (mis. \"jadwalin rapat besok 10.00-11.00\" atau \"pindah card ... ke In Progress\")\n\n" +
       "5️⃣ Saham, Ekonomi & Cari Info\n" +
-      "• /saham BBCA • /ekonomi • /cari jadwal IPO terbaru\n\n" +
+      "• /saham BBCA • /ekonomi • /cari jadwal IPO terbaru\n" +
+      "• /menu → ➡️ Info & Riset: cuaca, crypto, saham, kurs, berita, Bank Dunia, gempa & libur (klik lalu ketik inputnya)\n\n" +
       "💡 Tips:\n" +
       "• Semua pencatatan ke spreadsheet selalu minta konfirmasi tombol dulu.\n" +
       "• Salah detail sebelum klik Simpan? Cukup balas chat, misal \"ganti bank ke Jago\".\n" +
@@ -322,6 +331,7 @@ export async function handleMenuCallback({
   superhumanService,
   kbService,
   calendarService,
+  inputStore,
   stepMs = 100,
   finishDelayMs = 0,
 }) {
@@ -331,6 +341,30 @@ export async function handleMenuCallback({
   }
 
   const userId = String(ctx.from.id);
+
+  // Navigasi halaman info: ganti tombol saja in-place, tanpa memuat ulang teks.
+  if (action === "page:info" || action === "page:home") {
+    await ctx.answerCbQuery();
+    const keyboard = action === "page:info" ? infoKeyboard() : homeKeyboard();
+    try {
+      await ctx.editMessageReplyMarkup({ inline_keyboard: keyboard });
+    } catch (err) {
+      if (!String(err?.message || "").includes("message is not modified")) {
+        await ctx.answerCbQuery("Gagal mengubah tombol. Ketik /menu untuk membuka ulang.");
+      }
+    }
+    return;
+  }
+
+  if (action.startsWith("info:")) {
+    if (!inputStore) {
+      await ctx.answerCbQuery("Fitur info belum tersedia.");
+      return;
+    }
+    await handleInfoMenuCallback({ ctx, action: action.slice(5), userId, inputStore });
+    return;
+  }
+
   if (action === "close") {
     await ctx.answerCbQuery();
     await safeEdit(ctx, { text: "Menu ditutup. Ketik /menu kapan saja untuk membuka kembali." });
@@ -429,6 +463,7 @@ export function registerMenuHandlers(bot, {
   superhumanService,
   kbService,
   calendarService,
+  inputStore,
 }) {
   const sendHome = async (ctx) => {
     const wsStore = workspaceStore || (pool?.query ? createWorkspaceStore(pool) : null);
@@ -466,6 +501,7 @@ export function registerMenuHandlers(bot, {
         superhumanService,
         kbService,
         calendarService,
+        inputStore,
       });
     } catch (error) {
       console.error("Menu callback error:", error);

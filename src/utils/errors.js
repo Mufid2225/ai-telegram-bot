@@ -2,9 +2,10 @@ export function redactSecrets(text, extraSecrets = []) {
   let out = String(text ?? "")
     .replace(/\/(bot|user)(\d+):[^/\s]+/g, "/$1$2:[REDACTED]")
     .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
-    .replace(/([?&](?:key|token)=)[^&\s"'`)]+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:key|token|api_key|apikey)=)[^&\s"'`)]+/gi, "$1[REDACTED]")
     .replace(/\b(?:ntn|secret|ATTA)_[A-Za-z0-9_-]{8,}|\bATTA[A-Za-z0-9_-]{12,}/g, "[REDACTED]")
-    .replace(/https:\/\/script\.google\.com\/macros\/s\/[^/\s]+\/exec/gi, "https://script.google.com/macros/s/[REDACTED]/exec");
+    .replace(/https:\/\/script\.google\.com\/macros\/s\/[^/\s]+\/exec/gi, "https://script.google.com/macros/s/[REDACTED]/exec")
+    .replace(/(\/v6\/)[A-Za-z0-9_-]{6,}(\/(?:latest|pair|enriched|history))/gi, "$1[REDACTED]$2");
 
   for (const secret of extraSecrets || []) {
     const val = String(secret ?? "").trim();

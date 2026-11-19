@@ -1,42 +1,62 @@
+import { createTtlCache } from "../utils/cache.js";
+
+const cache = createTtlCache();
+const SEARCH_TTL_MS = 600_000;
+
 async function searchTavily(query, maxResults = 5) {
   const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
   if (!TAVILY_API_KEY) return null;
-  const resp = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${TAVILY_API_KEY}`,
-    },
-    body: JSON.stringify({
-      query,
-      search_depth: "basic",
-      max_results: maxResults,
-      include_answer: true,
-    }),
-  });
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${TAVILY_API_KEY}`,
+      },
+      body: JSON.stringify({
+        query,
+        search_depth: "basic",
+        max_results: maxResults,
+        include_answer: true,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
 }
 
 async function searchNewsapi(query, maxResults = 5) {
   const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
   if (!NEWSAPI_KEY) return null;
   const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-  const resp = await fetch(
-    `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&from=${from}&sortBy=publishedAt&pageSize=${maxResults}&language=id&apiKey=${NEWSAPI_KEY}`
-  );
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(
+      `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&from=${from}&sortBy=publishedAt&pageSize=${maxResults}&language=id&apiKey=${NEWSAPI_KEY}`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
 }
 
 async function searchSerpapi(query, maxResults = 5) {
   const SERPAPI_KEY = process.env.SERPAPI_KEY;
   if (!SERPAPI_KEY) return null;
-  const resp = await fetch(
-    `https://serpapi.com/search?q=${encodeURIComponent(query)}&api_key=${SERPAPI_KEY}&engine=google&num=${maxResults}`
-  );
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    const resp = await fetch(
+      `https://serpapi.com/search?q=${encodeURIComponent(query)}&api_key=${SERPAPI_KEY}&engine=google&num=${maxResults}`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
 }
 
 function formatTavily(data) {
@@ -67,44 +87,53 @@ function formatSerpapi(data) {
 }
 
 export async function webSearch(query, maxResults = 5) {
-  for (let retry = 0; retry < 2; retry++) {
-    const tavData = await searchTavily(query, maxResults);
-    if (tavData && tavData.results && tavData.results.length > 0) return formatTavily(tavData);
-    if (retry === 0) await new Promise(r => setTimeout(r, 1000));
-  }
-
-  const newsData = await searchNewsapi(query, maxResults);
-  if (newsData && newsData.articles && newsData.articles.length > 0) return formatNewsapi(newsData);
-
-  const serpData = await searchSerpapi(query, maxResults);
-  if (serpData && serpData.organic_results && serpData.organic_results.length > 0) return formatSerpapi(serpData);
-
-  const simpleQuery = query.replace(/[?\s]+/g, " ").trim().split(" ").slice(-5).join(" ");
-  if (simpleQuery !== query) {
+  return cache.wrap(`web:${maxResults}:${query}`, SEARCH_TTL_MS, async () => {
     for (let retry = 0; retry < 2; retry++) {
-      const tavData2 = await searchTavily(simpleQuery, maxResults);
-      if (tavData2 && tavData2.results && tavData2.results.length > 0) return formatTavily(tavData2);
+      const tavData = await searchTavily(query, maxResults);
+      if (tavData && tavData.results && tavData.results.length > 0) return formatTavily(tavData);
       if (retry === 0) await new Promise(r => setTimeout(r, 1000));
     }
 
-    const serpData2 = await searchSerpapi(simpleQuery, maxResults);
-    if (serpData2 && serpData2.organic_results && serpData2.organic_results.length > 0) return formatSerpapi(serpData2);
-  }
+    const newsData = await searchNewsapi(query, maxResults);
+    if (newsData && newsData.articles && newsData.articles.length > 0) return formatNewsapi(newsData);
 
-  return null;
+    const serpData = await searchSerpapi(query, maxResults);
+    if (serpData && serpData.organic_results && serpData.organic_results.length > 0) return formatSerpapi(serpData);
+
+    const simpleQuery = query.replace(/[?\s]+/g, " ").trim().split(" ").slice(-5).join(" ");
+    if (simpleQuery !== query) {
+      for (let retry = 0; retry < 2; retry++) {
+        const tavData2 = await searchTavily(simpleQuery, maxResults);
+        if (tavData2 && tavData2.results && tavData2.results.length > 0) return formatTavily(tavData2);
+        if (retry === 0) await new Promise(r => setTimeout(r, 1000));
+      }
+
+      const serpData2 = await searchSerpapi(simpleQuery, maxResults);
+      if (serpData2 && serpData2.organic_results && serpData2.organic_results.length > 0) return formatSerpapi(serpData2);
+    }
+
+    return null;
+  });
 }
 
 export async function newsSearch(query, maxResults = 5, language = "id") {
-  const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
-  if (!NEWSAPI_KEY) return null;
-  const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-  const resp = await fetch(
-    `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&from=${from}&sortBy=publishedAt&pageSize=${maxResults}&language=${language}&apiKey=${NEWSAPI_KEY}`
-  );
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  if (!data.articles || data.articles.length === 0) return null;
-  return data.articles.map(a => `- ${a.title} (${a.source.name})\n  ${a.description || ""}`).join("\n");
+  return cache.wrap(`news:${language}:${maxResults}:${query}`, SEARCH_TTL_MS, async () => {
+    const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
+    if (!NEWSAPI_KEY) return null;
+    const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    try {
+      const resp = await fetch(
+        `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&from=${from}&sortBy=publishedAt&pageSize=${maxResults}&language=${language}&apiKey=${NEWSAPI_KEY}`,
+        { signal: AbortSignal.timeout(10000) }
+      );
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (!data.articles || data.articles.length === 0) return null;
+      return data.articles.map(a => `- ${a.title} (${a.source.name})\n  ${a.url || ""}\n  ${a.description || ""}`).join("\n");
+    } catch {
+      return null;
+    }
+  });
 }
 
 const SEARCH_TRIGGERS = [
@@ -128,8 +157,6 @@ export function detectSearchNeeded(text) {
   const hasCompanySuffix = /[A-Z]{3,4}/.test(text);
 
   if (isQuestion && hasCompanySuffix) return true;
-
-  if (lower.includes("jel") || lower.includes("rans") || lower.includes("niramas")) return true;
 
   return false;
 }

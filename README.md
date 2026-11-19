@@ -1,6 +1,6 @@
 # Nerrisa Bot — Telegram AI Assistant
 
-Telegram bot asisten pribadi berbasis **Node.js (ESM)** & **Telegraf** dengan menu inline interaktif (`/menu`), integrasi **MoneyTracker (Google Sheets)**, **Google Calendar**, **Trello**, **Notion**, **Superhuman Docs**, **Knowledge Base lokal (read-only)**, catatan & reminder persisten, analisis saham/ekonomi, pemrosesan file (OCR/PDF/DOCX), dan web search. Ditenagai langsung oleh **OpenAI API** (`gpt-6-luna` / endpoint OpenAI-compatible).
+Telegram bot asisten pribadi berbasis **Node.js 22+ (ESM)** & **Telegraf** dengan persona [SOUL.md](SOUL.md), menu inline interaktif dua halaman (`/menu`), **riset informasi on-demand lewat AI tool calling** (berita, saham, crypto, kurs, cuaca, gempa, hari libur, data Bank Dunia, baca artikel penuh), integrasi **MoneyTracker (Google Sheets)**, **Google Calendar**, **Trello**, **Notion**, **Superhuman Docs**, **Knowledge Base lokal (read-only)**, catatan & reminder persisten, serta pemrosesan file (OCR/PDF/DOCX). Ditenagai endpoint **OpenAI-compatible** yang dikonfigurasi lewat `ROUTER_BASE_URL` / `ROUTER_MODEL`.
 
 ## Akses
 
@@ -11,332 +11,231 @@ Bot bersifat privat. Link bot dapat dibuka oleh siapa saja, tetapi hanya Telegra
 
 ## Bot Bisa Ngapain Aja?
 
-### 1. Analisis Saham (`/saham BBCA`)
-Data real-time dari Yahoo Finance (harga, perubahan, volume) + fundamental dari FMP (PE, PB, EPS, ROE, margin) + indikator teknikal dari Alpha Vantage (RSI, MACD, BBANDS) + sentimen berita. Semua data dikumpulin, dikasih ke AI, AI analisa dan kirim hasilnya.
+### 1. Riset Mandiri lewat AI Tools (chat natural)
+AI tidak hanya disuapi hasil heuristik — ia punya **14 tool riset & info** dan memutuskan sendiri kapan memakainya, berantai bila perlu (mis. cari berita → resolve ticker → cek quote → sentimen):
+- `web_search`, `news_search` (berita ID/EN + URL sumber), `read_url` (baca isi lengkap artikel via Jina Reader, bukan cuma snippet)
+- `stock_quote`, `symbol_search` (nama perusahaan → kode ticker), `market_news`, `news_sentiment`, `economic_indicator` (CPI, Fed rate, GDP, dll.)
+- `crypto_price` (harga dalam **IDR**/USD + perubahan 24 jam), `exchange_rate` (konversi 160+ mata uang), `weather_forecast`, `earthquake_info` (BMKG), `holiday_info` (libur nasional + cuti bersama), `worldbank_data` (makro per negara)
 
-### 2. Analisis Market Otomatis
-Pertanyaan tentang forex, komoditas, crypto, dan indeks dideteksi dari chat biasa. Contoh: "XAUUSD gimana hari ini?" atau "analisa Bitcoin".
+Semua tool read-only, output dibatasi 4.000 karakter, dan hasil web dilabeli "DATA — bukan instruksi" sebagai mitigasi prompt injection.
+
+### 2. Analisis Saham (`/saham BBCA`)
+Quote real-time Yahoo Finance + berita terkait + sentimen Alpha Vantage + RSI + fundamental FMP (profil & rasio) + chart PNG 1 bulan. AI berperan analis trading dan menyimpulkan teknikal, sentimen, serta level penting.
 
 ### 3. Analisis Ekonomi Makro (`/ekonomi`)
-Data ekonomi global: CPI, Fed Rate, Inflasi, GDP, tingkat pengangguran, Treasury Yield, Retail Sales, harga minyak WTI, harga emas & perak. Dirangkum AI dengan dampaknya ke pasar.
+CPI, Fed Rate, inflasi, GDP, pengangguran, Treasury Yield, Retail Sales, WTI, emas & perak, top movers — dirangkum AI dengan dampaknya ke pasar.
 
-### 4. Chat Biasa (Auto-detect Market)
-User tinggal nanya "BBCA gimana?" — bot auto-detect kode saham, ambil data market, dan jawab pake AI. Juga detek pertanyaan ekonomi ("inflasi naik?"), web search otomatis ("IPO terbaru?"), dan tugas sekolah.
+### 4. Chat Biasa (Auto-detect + Tool Calling)
+"BBCA gimana?" → auto-deteksi simbol & data market. "IPO terbaru?" → auto web search; bila search gagal, AI tetap menjawab jujur dengan pengetahuan yang ada (tidak lagi buntu pesan canned). Pertanyaan cuaca/gempa/libur/kurs/crypto dijawab lewat tool terkait lengkap dengan sumber.
 
-### 5. Manajemen Tugas Sekolah
-Simpan tugas otomatis dari chat. Commands: `/tugas` (lihat semua), `/hapus 3` (hapus), `/update 3 deadline 2026-07-15` (edit), `/remind` (reminder deadline hari ini & besok). Bisa kirim foto tugas, bot OCR + simpen otomatis.
+### 5. MoneyTracker (Google Sheets Live Sync + Chat / OCR)
+Single source of truth di Google Sheets via Apps Script Web App:
+- `/keuangan` — ringkasan Dashboard + grafik PNG
+- `/pengeluaran` — daftar transaksi terbaru + nomor baris
+- `/catat`, chat natural, atau foto struk/QRIS → draft transaksi dengan konfirmasi `[✅ Simpan]` / `[❌ Batal]`
+- Konsultasi budget & simulasi mingguan tanpa mencatat transaksi palsu
 
-### 6. File Processing
-- **Foto** — OCR pake Tesseract.js (extract teks dari gambar)
-- **PDF** — Extract teks pake pdf-parse
-- **DOCX** — Extract teks pake mammoth
-Hasilnya dikasih ke AI untuk dianalisis / dirangkum. Ukuran file dibatasi 10 MB dan teks hasil ekstraksi dibatasi 30.000 karakter.
+### 6. Catatan, Tugas & Reminder Persisten
+`/catatan`, `/tugas`, `/hapus`, `/update`, `/remind` — tersimpan di SQLite lokal (`data.db`), tahan restart. Reminder terjadwal dikirim otomatis oleh poller.
 
-### 7. Web Search (`/cari` + Auto)
-Cari info real-time dari internet. Chain: **Tavily** (primer) → **NewsAPI** (berita Indonesia) → **SerpAPI** (Google fallback). Bisa manual (`/cari IPO terbaru`) atau auto-detect kalo user nanya informasi terkini.
+### 7. Google Calendar, Workspace & Knowledge Base (`/menu` + chat natural)
+- **Google Calendar** — via jembatan Apps Script (tanpa OAuth terpisah): agenda, sub-kalender, deteksi bentrok, tambah/geser/hapus dengan konfirmasi tombol
+- **Trello** — board live, list terpaginasi, cari card, tambah/pindah/arsip dengan konfirmasi
+- **Notion** — database terhubung, schema & baris terbaru, tambah/update/arsip dengan verifikasi baca ulang
+- **Superhuman Docs** — dokumen & tabel, cek akses write/read-only, mutasi async dengan polling
+- **Knowledge Base (read-only)** — jelajahi & baca Markdown lokal (`KB_DIR`) dengan proteksi path traversal/symlink escape
 
-### 8. MoneyTracker (Google Sheets Live Sync + Chat / OCR)
-Terhubung langsung ke Google Sheets `MoneyTracker` via Google Apps Script Web App sebagai *single source of truth*:
-- `/keuangan` — ringkasan `Dashboard` (Income, Alokasi, Realisasi, Saldo, overbudget) + grafik PNG
-- `/pengeluaran` — daftar transaksi terbaru dari tab `Expenses`
-- `/catat` atau chat natural / foto struk — ekstraksi transaksi otomatis dengan konfirmasi tombol `[✅ Simpan]` / `[❌ Batal]` sebelum menulis ke sheet
-- Konsultasi budget & simulasi mingguan (tanpa mencatatkan transaksi palsu)
+### 8. File Processing
+Foto (OCR Tesseract.js), PDF (pdf-parse), DOCX (mammoth) → teks diserahkan ke AI untuk dianalisis/dirangkum; foto struk otomatis jadi draft pengeluaran. Batas 10 MB & 30.000 karakter ekstraksi.
 
-### 9. Catatan & Reminder Persisten
-Catatan biasa (`/catatan`), fakta user (`knowledge`), dan reminder terjadwal (`/remind`) tersimpan permanen di SQLite lokal (`data.db`) dan tidak hilang saat server restart.
+### 9. Web Search Manual (`/cari`)
+Chain provider: **Tavily** (primer) → **NewsAPI** → **SerpAPI** → fallback query sederhana. Hasil dirangkum AI dengan sitasi sumber.
 
-### 10. Google Calendar, Workspace & Knowledge Base (`/menu` + Natural Chat)
-Integrasi opsional yang dapat dipilih langsung dari `/menu` (dengan indikator loading tombol `0% → 100%` dan konteks aktif):
-- **Google Calendar** — terhubung melalui jembatan Apps Script (`MoneyTracker.gs` + `CalendarApp`) tanpa setup OAuth/Google Cloud terpisah; lihat agenda Hari Ini / 7 Hari / 30 Hari, pilih sub-kalender, deteksi jadwal bentrok otomatis, serta tambah/geser/hapus jadwal dengan konfirmasi tombol (`✅ Simpan` / `❌ Batal`)
-- **Trello** — pilih board secara live, lihat ringkasan list terpaginasi, cari card, serta tambah/pindah/arsipkan card dengan tombol konfirmasi (`✅ Simpan` / `❌ Batal`)
-- **Notion** — pilih database/page yang terhubung ke integrasi Notion, lihat schema properti & baris terbaru, serta tambah/update/arsipkan baris dengan verifikasi baca ulang
-- **Superhuman Docs** — pilih dokumen & tabel, cek akses `write`/`read-only`, serta tambah/update baris tabel dengan polling mutasi async
-- **Knowledge Base (Read-Only)** — jelajahi folder & baca catatan Markdown lokal (`KB_DIR`) secara aman dengan proteksi path traversal
+## Menu Interaktif Dua Halaman
 
-## Arsitektur Bot
+`/menu` (atau `/start`) membuka hub dengan status cepat. Tombol **➡️ Info & Riset** mengganti **hanya keyboard** (teks pesan tetap) ke halaman 2:
 
-```
-                        ┌─────────────────────────────────────┐
-                        │         Telegram Bot (index.js)     │
-                        │         Telegraf framework          │
-                        └──────┬──────┬──────┬──────┬─────────┘
-                               │      │      │      │
-              ┌────────────────┘      │      │      └──────────────────┐
-              ▼                       ▼      ▼                         ▼
-     ┌──────────────────┐   ┌──────────────┐   ┌───────────────┐  ┌───────────┐
-     │    AI Engine     │   │  Market Data │   │   Database    │  │  Search   │
-     │   OpenAI API     │   │  (3 sumber)  │   │    SQLite     │  │  Web      │
-     │  (gpt-6-luna)    │   │              │   │   (data.db)   │  │           │
-     └──────────────────┘   └──────┬───────┘   └───────┬───────┘  └─────┬─────┘
-                                   │                   │                │
-                                   ▼                   ▼                ▼
-                          ┌────────────────┐    ┌────────────┐    ┌──────────────┐
-                          │ Yahoo Finance  │    │  memories  │    │   Tavily     │
-                          │  - Quote       │    │    tugas   │    │   (primer)   │
-                          │  - News        │    │  convers.  │    │              │
-                          │  - Search      │    │  knowl.    │    │   NewsAPI    │
-                          │                │    │   graph    │    │   (fallback) │
-                          │ Alpha Vantage  │    └────────────┘    │              │
-                          │  - 65 fungsi   │                      │   SerpAPI    │
-                          │  - Teknikal    │                      │   (last)     │
-                          │  - Fundamental │                      └──────────────┘
-                          │  - Ekonomi     │
-                          │                │
-                          │ FMP            │
-                          │  - Profile     │
-                          │  - Rasio       │
-                          └────────────────┘
-```
+| Tombol | Perilaku |
+|--------|----------|
+| 🌦️ Cek Cuaca / 🪙 Cek Crypto / 📈 Cek Saham / 💱 Cek Kurs / 📰 Cari Berita / 🏦 Data Bank Dunia | Klik → prompt "silakan ketik …" (force_reply + placeholder) → ketik input (reply atau biasa) → hasil dikirim sebagai pesan baru |
+| 🌍 Gempa Terbaru / 📅 Libur Bulan Ini | Langsung dieksekusi tanpa input (libur kosong bulan ini → 3 libur terdekat) |
+| ⬅️ Kembali / ✖️ Tutup | Kembali ke keyboard halaman 1 / tutup menu |
 
-### Alur Data (Contoh: `/saham BBCA`)
+**Alur input hybrid** (prompt + state menunggu): state disimpan di SQLite (`input_requests`, TTL 5 menit, klaim atomik). Pengaman: ketik `batal` membatalkan, command apa pun membatalkan, reply ke pesan lain tidak dibajak, prompt baru menimpa yang lama, dan dua pesan konkuren tidak mengeksekusi ganda. Tanpa state aktif, chat berjalan normal lewat AI.
+
+## Arsitektur
 
 ```
-User: /saham BBCA
-   │
-   ├─ Yahoo Finance  → Harga real-time, perubahan, volume, high/low
-   ├─ Yahoo Finance  → 4 berita terkait BBCA
-   ├─ Alpha Vantage  → Sentimen berita (news sentiment)
-   ├─ FMP            → Profil perusahaan (sektor, industri, CEO, market cap)
-   ├─ FMP            → Rasio keuangan (PE, PB, EPS, ROE, margin, D/E)
-   ├─ Alpha Vantage  → Earnings terbaru
-   ├─ Alpha Vantage  → RSI (indikator teknikal)
-   └─ Alpha Vantage  → Top gainers/losers pasar
-        │
-        ▼
-   Semua data dikumpulkan → diformat → dimasukkan ke system prompt AI
-   → AI menganalisis (teknikal + fundamental + sentimen + risiko)
-   → Bot kirim hasil analisis ke user
+ Telegram (Telegraf, allowlist single-user)
+   │  middleware: allowlist → guard pembatal state input → handlers
+   ├─ handlers/   menu (2 halaman), info-menu (prompt+routing), messages (chat+tool loop),
+   │              money, market, tasks, files, actions (konfirmasi), workspace-menu
+   ├─ tools.js    gabungan AI tools: money/catatan/reminder/knowledge
+   │              + tools/workspace (15) + tools/calendar (5)
+   │              + tools/research (7) + tools/info (7)
+   ├─ services/   ai (router OpenAI-compatible, retry/backoff, maxSteps 8)
+   │              market/alpha/fmp/chart (saham & makro)
+   │              search (Tavily→NewsAPI→SerpAPI)
+   │              jina, bmkg, holidays, coingecko, fx (ExchangeRate→Frankfurter),
+   │              weather (Open-Meteo), worldbank (Data360)
+   │              sheets, calendar, trello, notion, superhuman, kb
+   │              pending (konfirmasi atomik), reminder (poller),
+   │              workspace (active_context+callback_refs), inputRequest (state input)
+   └─ utils/      cache TTL, telegram (chunking/progress), errors (redaksi secret),
+                  http (timeout), soul (loader SOUL.md), infoInput (parser deterministik)
+ SQLite (data.db): memories, conversations, knowledge, reminders,
+                   pending_actions, active_context, callback_refs, input_requests
 ```
 
-### Alur Chat Biasa (Auto-detect Market)
+Prinsip: **tidak ada mirror data eksternal di SQLite** (Sheets/Calendar/Trello/Notion/Superhuman tetap single source of truth); SQLite hanya untuk data lokal & state UI. Semua fetch provider memakai timeout + cache TTL; kegagalan provider tidak di-cache agar bisa retry.
+
+### Contoh Alur Chat Tool-Driven
 
 ```
-User: "BBCA gimana hari ini?"
-   │
-   ├─ detectSymbol("BBCA") → "BBCA.JK"
-   ├─ Yahoo Finance → Quote + berita
-   ├─ Alpha Vantage → RSI + sentimen
-   ├─ FMP → Profil + rasio
-   ├─ Memory → Tugas/catatan user sebelumnya
-   ├─ Knowledge graph → Fakta tentang user
-   └─ Conversations → 10 pesan terakhir
-        │
-        ▼
-   → AI jawab dengan konteks lengkap
-```
-
-### Alur Web Search (Auto-detect)
-
-```
-User: "IPO terbaru apa?"
-   │
-   ├─ detectSearchNeeded() → true (trigger: "IPO" + "terbaru")
-   ├─ buildSearchQuery() → "IPO terbaru 2026 Indonesia"
-   ├─ webSearch():
-   │   1. Tavily (retry 2x)
-   │   2. NewsAPI (30 hari terakhir)
-   │   3. SerpAPI (Google fallback)
-   │   4. Simple query fallback (5 kata terakhir)
-   │
-   ├─ Sukses → "Informasi terkini: [...]" → AI jawab pake data real-time
-   └─ Gagal → Bot kirim panduan manual (IDX/e-IPO/sekuritas)
+User: "berita RANS terbaru terus sahamnya gimana?"
+   │ AI step 1: news_search("RANS ...")      → snippet + URL
+   │ AI step 2: symbol_search("RANS")        → RANS.JK
+   │ AI step 3: stock_quote("RANS.JK")       → quote + berita (ter-cache)
+   │ AI step 4: read_url(<url artikel>)      → isi penuh (opsional)
+   ▼ Jawaban sintetis + sitasi sumber (teks polos, tanpa markdown)
 ```
 
 ## Sumber Data & API
 
-| Modul | Sumber | Limit | Fungsi |
-|-------|--------|-------|--------|
-| `market.js` | Yahoo Finance | ~unlimited | Quote real-time, berita, search simbol |
-| `alpha.js` | Alpha Vantage | 25 req/hari | 65 fungsi: teknikal (RSI, MACD, BBANDS, SMA, dll), fundamental (earnings, overview), ekonomi (CPI, GDP, Fed Rate, inflasi, unemployment), komoditas (WTI, Brent, emas, tembaga, gandum, dll), forex, crypto, sentimen, top gainers |
-| `fmp.js` | Financial Modeling Prep | 250 req/hari | Profil perusahaan, rasio keuangan (PE, PB, EPS, ROE, margin, D/E) |
-| `search.js` | Tavily | 1000 req/bulan | Web search AI-optimized (primer) |
-| `search.js` | NewsAPI | 100 req/hari | Berita bahasa Indonesia (fallback) |
-| `search.js` | SerpAPI | 100 search/bulan | Google search (fallback terakhir) |
+| Modul | Sumber | Limit free tier | Fungsi |
+|-------|--------|-----------------|--------|
+| `market.js` | Yahoo Finance | unofficial, tanpa key | Quote real-time (saham ID/US, forex, komoditas, crypto), berita, chart |
+| `alpha.js` | Alpha Vantage | 25 req/hari, 5/menit | Teknikal, sentimen berita, makro, komoditas, forex, crypto, symbol search |
+| `fmp.js` | Financial Modeling Prep | 250 req/hari | Profil & rasio keuangan |
+| `search.js` | Tavily → NewsAPI → SerpAPI | 1000/bln • 100/hari • 100/bln | Web search & berita berantai |
+| `jina.js` | Jina Reader | tanpa key 20 RPM; key gratis 500 RPM + 10M token | Baca isi lengkap URL/PDF jadi markdown LLM-friendly |
+| `bmkg.js` | BMKG (data terbuka) | 60 req/menit/IP, tanpa key | Gempa terbaru, M5+, dirasakan, shakemap. **Wajib atribusi BMKG** |
+| `holidays.js` | Tanggal Merah (upset.dev) | tanpa key | Libur nasional + cuti bersama Indonesia |
+| `coingecko.js` | CoinGecko Demo | 10k credits/bulan, 100/menit | Harga crypto IDR/USD + 24h change. **Wajib atribusi CoinGecko** |
+| `fx.js` | ExchangeRate-API → Frankfurter v2 | 1.500 req/bulan (harian) • fallback tanpa key | Kurs & konversi; fallback otomatis saat key absen/limit/gagal |
+| `weather.js` | Open-Meteo | 10k calls/hari, **non-komersial**, CC-BY 4.0 | Geocoding + prakiraan cuaca 1–7 hari |
+| `worldbank.js` | World Bank Data360 | gratis, CC-BY 4.0, tanpa key | Makro per negara (PDB, inflasi, populasi, dll.) |
+
+Cache TTL (melindungi kuota): quote 60s • berita/search 10m • sentimen/teknikal 15m • cuaca 15m • makro/insider 6j • fundamental/symbol/kurs/libur/World Bank 24j • artikel Jina 10m.
 
 ## Database (SQLite)
 
-- Table `memories` — tugas dan catatan user
-- Table `conversations` — riwayat chat; 10 pesan terakhir dipakai sebagai konteks AI
-- Table `knowledge` — knowledge graph (entity → attribute → value)
-- Table `reminders` — jadwal reminder persisten (tetap tersimpan saat server restart)
-- Table `pending_actions` — draft konfirmasi tombol untuk aksi tulis Google Sheets & Workspace (TTL 24 jam)
-- Table `active_context` — menyimpan sumber workspace terakhir yang dibuka user di `/menu`
-- Table `callback_refs` — referensi pendek 8-karakter agar `callback_data` tombol inline Telegram selalu di bawah batas 64 byte
-
-Percakapan lama dibersihkan saat startup berdasarkan `CONVERSATION_RETENTION_DAYS` (default 90 hari). Database lokal, WAL, dan file environment sudah diabaikan oleh Git.
+- `memories` — catatan & tugas; `conversations` — riwayat chat (10 terakhir jadi konteks, retensi `CONVERSATION_RETENTION_DAYS` default 90 hari)
+- `knowledge` — knowledge graph entity→attribute→value
+- `reminders` — pengingat terjadwal persisten
+- `pending_actions` — draft konfirmasi tombol (TTL 24 jam, klaim atomik, draft lama superseded)
+- `active_context` — sumber workspace terakhir per user
+- `callback_refs` — ref pendek 8 karakter agar `callback_data` ≤ 64 byte
+- `input_requests` — state "menunggu input" menu info (TTL 5 menit, satu per user, klaim atomik)
 
 ## Perintah (Commands)
 
-### Menu & MoneyTracker (Google Sheets)
 | Command | Contoh | Fungsi |
 |---------|--------|--------|
-| `/menu` | `/menu` (atau `/start`) | Menu interaktif dengan inline button yang berganti halaman langsung |
-| `/catat` | `/catat bensin 25rb cash` | Buat draft catat pengeluaran/pemasukan dengan tombol konfirmasi |
-| `/keuangan` | `/keuangan november` | Ringkasan Dashboard (Income, Alokasi, Realisasi, Saldo) + grafik PNG |
-| `/pengeluaran` | `/pengeluaran november` | Daftar transaksi terbaru dari tab `Expenses` (beserta nomor baris) |
+| `/menu` / `/start` | `/menu` | Hub interaktif dua halaman |
+| `/catat` | `/catat bensin 25rb cash` | Draft pengeluaran/pemasukan + konfirmasi |
+| `/keuangan` | `/keuangan november` | Ringkasan Dashboard + grafik PNG |
+| `/pengeluaran` | `/pengeluaran november` | Daftar transaksi + nomor baris |
+| `/saham` | `/saham BBCA` | Analisis saham + chart PNG |
+| `/ekonomi` | `/ekonomi` | Ringkasan makro global |
+| `/cari` | `/cari IPO terbaru 2026` | Web search + rangkuman AI |
+| `/catatan` `/tugas` `/hapus` `/update` `/remind` | `/update 3 deadline 2026-05-15` | Kelola catatan/tugas/reminder |
+| `/test` | `/test` | Tes koneksi AI router |
 
-### Market
-| Command | Contoh | Fungsi |
-|---------|--------|--------|
-| `/saham` | `/saham BBCA` | Analisis saham lengkap (harga, fundamental, teknikal, berita) |
-| `/ekonomi` | `/ekonomi` | Ringkasan data ekonomi global terkini |
-
-### Manajemen Tugas, Catatan & Reminder
-| Command | Contoh | Fungsi |
-|---------|--------|--------|
-| `/catatan` | `/catatan` | Lihat catatan, tugas, dan memo tersimpan |
-| `/tugas` | `/tugas` | Lihat daftar tugas tersimpan |
-| `/hapus` | `/hapus 3` | Hapus catatan/tugas berdasarkan ID |
-| `/update` | `/update 3 deadline 2026-05-15` | Update field tugas |
-| `/remind` | `/remind` | Lihat reminder terjadwal & deadline tugas hari ini/besok |
-
-### Web Search
-| Command | Contoh | Fungsi |
-|---------|--------|--------|
-| `/cari` | `/cari IPO terbaru 2026` | Cari info dari internet |
-
-### Utility
-| Command | Contoh | Fungsi |
-|---------|--------|--------|
-| `/test` | `/test` | Test koneksi ke OpenAI / AI endpoint aktif |
-
-### Auto-detect & Chat Natural (Tanpa Command)
-- **Saham**: "BBCA gimana?" → auto-analisis
-- **Ekonomi**: "inflasi naik?" → auto-ambil data ekonomi
-- **IPO**: "IPO terbaru?" → auto-web search
-- **MoneyTracker**: "tadi beli bensin 25rb cash" / kirim foto struk → buat draft pengeluaran (`✅ Simpan` / `❌ Batal`)
-- **Google Calendar**: "jadwal minggu ini apa aja?" / "besok jam 10-11 jadwalin bimbingan TA"
-- **Workspace & KB**: "pindah card ... ke In Progress", "cari test case auth di Notion", "cek KB soal ..."
-- **Tugas & File**: "tugas matematika deadline besok" atau kirim foto/PDF/DOCX → auto-proses OCR/extract
+Chat natural tanpa command: saham/ekonomi/IPO auto-detect; "cuaca Malang besok", "gempa terbaru", "1 USD berapa IDR", "harga BTC rupiah", "PDB Indonesia 2023", "besok libur gak"; MoneyTracker & Calendar & Workspace lewat kalimat biasa; foto struk/PDF/DOCX auto-proses.
 
 ## Cara Kerja AI
 
-Bot menembak langsung **OpenAI API** (endpoint kompatibel `/chat/completions`, menggunakan model **`gpt-6-luna`**) dengan *multi-step tool calling* agar AI dapat membaca data live maupun membuat draft konfirmasi secara aman. Semua respon chat:
+Endpoint OpenAI-compatible (`ROUTER_BASE_URL`, model `ROUTER_MODEL`) dengan **multi-step tool calling** (maks 8 langkah per pesan), retry/backoff untuk 429/503, dan fallback parse SSE. Respon diatur persona [SOUL.md](SOUL.md) (dibaca runtime), teks polos (`stripMarkdown`), Bahasa Indonesia informal. Indikator typing native untuk chat; progress bar `0% → 100%` untuk interaksi menu & konfirmasi. Output tool di-cap 4.000 karakter; konten web diberi label data-bukan-instruksi.
 
-- Diatur persona dan batasannya lewat [SOUL.md](SOUL.md) (dibaca runtime setiap pesan)
-- Teks polos bebas sintaks markdown (`stripMarkdown()`)
-- Natural, santai, ramah dalam Bahasa Indonesia informal (dengan emoji secukupnya)
-- Memakai indikator *typing...* native di chat biasa, dan progress bar `0% → 100%` khusus saat interaksi tombol `/menu` & `✅ Simpan`
+## Keamanan & Privasi
+
+- **Single-user gate**: semua update dari user selain `ALLOWED_USER_ID` ditolak sebelum handler.
+- **Konfirmasi wajib** untuk semua tulis/edit/arsip eksternal (Sheets, Calendar, Trello, Notion, Superhuman) lewat `pending_actions` + tombol inline; hanya pemilik yang bisa konfirmasi.
+- **Non-destruktif**: Trello/Notion diarsipkan (`closed`/`archived`), tidak pernah DELETE permanen; KB selalu read-only dengan validasi realpath.
+- **Redaksi secret** otomatis pada error (`Bearer`, query `key/token/api_key/apikey`, path key ExchangeRate `/v6/…`, token bot/Notion/Trello, URL Apps Script).
+- **Tanpa mirror** data eksternal di SQLite; secret hanya di env (`.env.local` di-gitignore), tidak pernah di source/test/docs.
+- Test 100% offline dengan data dummy; repo public sehingga tidak ada ID personal/path lokal/kredensial di kode.
 
 ## Setup
 
 ### Prerequisites
 - Node.js 22+
-- OpenAI API Key (atau endpoint OpenAI-compatible) beserta model `gpt-6-luna`
+- API key endpoint OpenAI-compatible (`ROUTER_API_KEY`) + model pilihan
 
 ### Instalasi
 ```bash
 git clone https://github.com/Mufid2225/ai-telegram-bot.git
 cd ai-telegram-bot
 npm install
+cp .env.example .env.local   # lalu isi nilainya; JANGAN commit .env.local
 ```
 
-### Environment Variables
-Salin `.env.example` menjadi `.env.local`, lalu isi nilainya. Aplikasi memuat `.env.local` (`override: true`), dan kredensial opsional yang tidak tertulis di `.env.local` tetap dapat dibaca dari OS/User Environment Variables:
-```bash
-cp .env.example .env.local
-```
+Aplikasi memuat `.env.local` (`override: true`); kredensial opsional yang tidak tertulis di situ tetap dibaca dari OS/User Environment Variables.
 
-Jangan commit `.env.local`. `ALLOWED_USER_ID` diisi dengan numeric Telegram user ID pemilik bot.
+**Wajib:** `BOT_TOKEN`, `ALLOWED_USER_ID`, `ROUTER_API_KEY`, `ROUTER_BASE_URL`, `ROUTER_MODEL`.
 
-Konfigurasi wajib:
-- `BOT_TOKEN`
-- `ALLOWED_USER_ID`
-- `ROUTER_API_KEY` — OpenAI API key (atau provider OpenAI-compatible)
-- `ROUTER_BASE_URL` — contoh: `https://api.openai.com/v1`
-- `ROUTER_MODEL` — contoh: `gpt-6-luna`
+**Opsional — market & search:** `ALPHA_VANTAGE_KEY`, `FMP_API_KEY`, `TAVILY_API_KEY`, `SERPAPI_KEY`, `NEWSAPI_KEY`.
 
-Konfigurasi MoneyTracker (Google Sheets Apps Script — opsional):
-- `SHEET_WEBHOOK_URL`
-- `SHEET_API_SECRET`
+**Opsional — info & riset:** `JINA_API_KEY` (tanpa key tetap jalan 20 RPM), `COINGECKO_API_KEY` (Demo), `EXCHANGERATE_API_KEY` (tanpa key otomatis fallback Frankfurter). **Tanpa key sama sekali:** BMKG, Tanggal Merah, Open-Meteo, Frankfurter, World Bank Data360.
 
-#### Setup Google Apps Script (`MoneyTracker`)
-1. Buka Google Sheets `MoneyTracker` → menu **Ekstensi → Apps Script**.
-2. Salin seluruh isi `apps-script/MoneyTracker.gs` ke editor Apps Script lalu simpan.
-3. Atur `SHEET_API_SECRET` (di **Project Settings → Script Properties** atau variabel `FALLBACK_API_SECRET`) agar sama dengan nilai `SHEET_API_SECRET` di `.env.local`.
-4. (Untuk Google Calendar) Pilih fungsi `authorizeCalendar` di toolbar editor Apps Script → klik **Run** → klik **Review permissions → Allow**.
-5. Klik **Deploy → New deployment** (atau **Manage deployments → Edit → New version** bila memperbarui deployment lama) → **Web app**:
-   - *Execute as*: **Me**
-   - *Who has access*: **Anyone**
-6. Salin URL `/exec` ke `SHEET_WEBHOOK_URL` di `.env.local`, lalu restart bot.
+**Opsional — MoneyTracker/Calendar:** `SHEET_WEBHOOK_URL`, `SHEET_API_SECRET`.
+**Opsional — workspace & KB:** `TRELLO_API_KEY`, `TRELLO_API_TOKEN`, `NOTION_API_KEY`, `SUPERHUMAN_API_TOKEN`, `KB_DIR`.
+**Lain:** `CONVERSATION_RETENTION_DAYS` (default 90), `PORT` (default 3000).
 
-Konfigurasi provider opsional:
-- `ALPHA_VANTAGE_KEY`
-- `FMP_API_KEY`
-- `TAVILY_API_KEY`
-- `SERPAPI_KEY`
-- `NEWSAPI_KEY`
-
-Konfigurasi Workspace & Knowledge Base (opsional):
-- `TRELLO_API_KEY` & `TRELLO_API_TOKEN`
-- `NOTION_API_KEY`
-- `SUPERHUMAN_API_TOKEN`
-- `KB_DIR` (path ke folder Markdown/Obsidian vault lokal, read-only)
-
-Konfigurasi lain:
-- `CONVERSATION_RETENTION_DAYS` — default 90 hari
-- `PORT` — default 3000
-
-Aplikasi berhenti saat startup jika konfigurasi wajib kosong atau tidak valid. Semua pengguna selain `ALLOWED_USER_ID` diabaikan.
-
-### Struktur
-```text
-SOUL.md            # Kepribadian & gaya bicara bot Nerissa (dibaca runtime)
-AGENTS.md          # Panduan AI coding agent untuk pengembangan repo ini
-apps-script/       # Google Apps Script Web App untuk MoneyTracker & Google Calendar
-docs/superpowers/  # Dokumen spec & implementation plan
-scripts/           # CLI runner PowerShell (nerissa-cli.ps1)
-src/
-├── index.js       # Entry point dan wiring Telegram
-├── config.js      # Validasi konfigurasi env
-├── database.js    # SQLite schema & pool (data.db)
-├── memory.js      # Knowledge graph dan memory
-├── tools.js       # Registrasi AI tools gabungan
-├── tools/         # Tool terarah Workspace/KB dan Google Calendar
-├── handlers/      # Handler menu, workspace-menu, actions, money, task, market, file, dan messages
-├── utils/         # Helper Telegram, HTTP client, error redaction, dan loader SOUL.md
-└── services/      # Integrasi OpenAI API, Sheets, Calendar, Trello, Notion, Superhuman, KB, pending, market, chart, search
-test/              # Unit & integration test offline (node --test)
-```
+#### Setup Google Apps Script (MoneyTracker & Calendar)
+1. Google Sheets `MoneyTracker` → **Ekstensi → Apps Script**; tempel isi `apps-script/MoneyTracker.gs`.
+2. Set Script Property `SHEET_API_SECRET` sama dengan nilai di `.env.local`.
+3. (Calendar) Jalankan fungsi `authorizeCalendar` sekali → Allow.
+4. **Deploy → New deployment → Web app**: Execute as **Me**, Who has access **Anyone**.
+5. Salin URL `/exec` ke `SHEET_WEBHOOK_URL`; restart bot.
 
 ### Menjalankan
 ```bash
 npm start
 ```
-
-Atau di Windows PowerShell (background runner dengan status health-check):
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/nerissa-cli.ps1 start
-powershell -ExecutionPolicy Bypass -File scripts/nerissa-cli.ps1 status
-powershell -ExecutionPolicy Bypass -File scripts/nerissa-cli.ps1 stop
-```
+atau PowerShell background runner: `scripts/nerissa-cli.ps1 start|status|stop`.
+Bot connect long-polling, health check di `PORT`, dan membuat `data.db` otomatis.
 
 ### Test
 ```bash
-npm test
+npm test        # 195 test, 100% offline (mock fetch, SQLite :memory:, tmp dir)
+node --check src/index.js
 ```
 
-Bot akan:
-- Connect ke Telegram (long polling)
-- Health check server di port 3000
-- SQLite database otomatis dibuat (`data.db`)
+### Struktur
+```text
+SOUL.md            # Persona & aturan runtime bot
+AGENTS.md          # Panduan AI coding agent repo ini
+apps-script/       # Bridge Apps Script MoneyTracker & Calendar
+docs/superpowers/  # Spec & implementation plan
+scripts/           # CLI runner PowerShell
+src/
+├── index.js       # Entry point, wiring, allowlist, guard, poller, health, shutdown
+├── config.js      # Validasi env
+├── database.js    # Schema SQLite & pool
+├── memory.js      # Knowledge graph & memory
+├── tools.js       # Registrasi + dispatch gabungan AI tools
+├── tools/         # workspace (15), calendar (5), research (7), info (7)
+├── handlers/      # menu, info-menu, workspace-menu, actions, money, market,
+│                  # tasks, files, messages
+├── services/      # ai, sheets, calendar, trello, notion, superhuman, kb,
+│                  # market, alpha, fmp, chart, search, jina, bmkg, holidays,
+│                  # coingecko, fx, weather, worldbank, pending, reminder,
+│                  # workspace, inputRequest, money
+└── utils/         # cache, telegram, errors, http, soul, infoInput
+test/              # 195 test offline (node --test)
+```
 
 ## Dependencies
 
-- `telegraf` — Telegram bot framework
-- `yahoo-finance2` — Yahoo Finance API
-- `better-sqlite3` — SQLite database
-- `tesseract.js` — OCR untuk gambar
-- `pdf-parse` — Baca file PDF
-- `mammoth` — Baca file DOCX
-- `dayjs` — Manipulasi tanggal
-- `dotenv` — Environment variables
+`telegraf`, `better-sqlite3`, `yahoo-finance2`, `tesseract.js`, `pdf-parse`, `mammoth`, `dayjs`, `dotenv`, `canvas` + `chart.js` + `chartjs-node-canvas` (grafik PNG), native `fetch`.
 
 ## Catatan
 
-- Alpha Vantage free tier: 25 request/hari — gunakan untuk data prioritas (RSI, earnings, CPI)
-- FMP free tier: 250 request/hari — cukup untuk analisis fundamental harian
-- Tavily free tier: 1000 request/bulan — untuk web search
-- Bot menggunakan SQLite lokal; backup `data.db` jika datanya perlu dipertahankan
-- Jangan commit `.env.local`, database, log, atau artefak chart pengujian
-- Pengguna hasil clone harus memakai bot token, OpenAI API key, dan API key milik sendiri
+- Kuota free tier kecil (Alpha Vantage 25/hari, CoinGecko 10k credits/bulan, ExchangeRate 1.500/bulan) — cache TTL di atas membuat pemakaian normal aman; kegagalan tidak di-cache agar retry mungkin.
+- Atribusi wajib ditampilkan: BMKG, CoinGecko, Open-Meteo (CC-BY), World Bank (CC-BY), ExchangeRate-API (link sumber).
+- Open-Meteo free tier **non-komersial**; bot personal aman, komersialisasi butuh tier berbayar.
+- NewsAPI free tier menunda artikel ~24 jam; untuk berita real-time andalkan Tavily/Jina.
+- Backup `data.db` bila datanya perlu dipertahankan; jangan commit `.env.local`, database, log, atau artefak chart.
+- Pengguna hasil clone wajib memakai bot token & API key milik sendiri.

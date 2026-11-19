@@ -9,7 +9,7 @@ test("createDatabase creates required tables and returns lastInsertRowid", async
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
     );
     const names = tables.rows.map((row) => row.name);
-    for (const expected of ["memories", "conversations", "knowledge", "pending_actions", "reminders", "active_context", "callback_refs"]) {
+    for (const expected of ["memories", "conversations", "knowledge", "pending_actions", "reminders", "active_context", "callback_refs", "input_requests"]) {
       assert.ok(names.includes(expected), `missing table ${expected}`);
     }
 

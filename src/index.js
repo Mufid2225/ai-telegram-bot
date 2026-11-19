@@ -14,11 +14,13 @@ import { createNotionService } from "./services/notion.js";
 import { createSuperhumanService } from "./services/superhuman.js";
 import { createKBService } from "./services/kb.js";
 import { createReminderStore, startReminderPoller } from "./services/reminder.js";
+import { createInputRequestStore } from "./services/inputRequest.js";
 import { registerTaskHandlers } from "./handlers/tasks.js";
 import { registerMarketHandlers } from "./handlers/market.js";
 import { registerMoneyHandlers } from "./handlers/money.js";
 import { registerActionHandlers } from "./handlers/actions.js";
 import { registerMenuHandlers, BOT_COMMANDS } from "./handlers/menu.js";
+import { registerInfoInputGuard } from "./handlers/info-menu.js";
 import { registerFileHandlers } from "./handlers/files.js";
 import { registerMessageHandlers } from "./handlers/messages.js";
 
@@ -42,6 +44,7 @@ const notionService = createNotionService(config);
 const superhumanService = createSuperhumanService(config);
 const kbService = createKBService(config);
 const reminderStore = createReminderStore(pool);
+const inputStore = createInputRequestStore(pool);
 
 bot.use(async (ctx, next) => {
   if (String(ctx.from?.id) !== config.allowedUserId) {
@@ -51,14 +54,17 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
+// Guard state input info: command apa pun membatalkan prompt yang sedang hidup.
+registerInfoInputGuard(bot, inputStore);
+
 const workspaceDeps = { workspaceStore, trelloService, notionService, superhumanService, kbService, calendarService };
 registerTaskHandlers(bot, { pool, reminderStore });
 registerMarketHandlers(bot, { config, callAI, dateStr });
 registerMoneyHandlers(bot, { config, callAI, pool, sheetsService, pendingStore, reminderStore, dateStr });
 registerActionHandlers(bot, { config, pendingStore, trelloService, notionService, superhumanService, calendarService });
-registerMenuHandlers(bot, { config, pool, sheetsService, reminderStore, ...workspaceDeps });
+registerMenuHandlers(bot, { config, pool, sheetsService, reminderStore, inputStore, ...workspaceDeps });
 registerFileHandlers(bot, { callAI, repository, pool, sheetsService, pendingStore, reminderStore, ...workspaceDeps, dateStr });
-registerMessageHandlers(bot, { pool, callAI, repository, sheetsService, pendingStore, reminderStore, ...workspaceDeps, dateStr });
+registerMessageHandlers(bot, { pool, callAI, repository, sheetsService, pendingStore, reminderStore, inputStore, ...workspaceDeps, dateStr });
 
 const reminderPoller = startReminderPoller({
   pool,
