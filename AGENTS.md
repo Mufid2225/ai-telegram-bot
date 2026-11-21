@@ -13,15 +13,18 @@
 - `src/index.js`: Entry point Telegraf, inisialisasi store & service, registrasi menu command (`setMyCommands`), startup reminder poller, health check HTTP server, dan graceful shutdown.
 - `src/config.js`: Validasi env dari `.env.local` (`override: true`) + fallback otomatis ke environment OS untuk kredensial opsional (`SHEET_*`, `TRELLO_*`, `NOTION_API_KEY`, `SUPERHUMAN_API_TOKEN`, `KB_DIR`).
 - `src/database.js`: SQLite factory (`createDatabase`) & schema (`memories`, `conversations`, `knowledge`, `pending_actions`, `reminders`, `active_context`, `callback_refs`).
-- `src/tools.js`, `src/tools/workspace.js`, & `src/tools/calendar.js`: Definisi & eksekutor tool AI:
-  - `src/tools.js`: Tool utama (`MoneyTracker` read/propose, catatan, reminder, knowledge graph, kalkulator, waktu) + penggabungan tool workspace & kalender.
+- `src/tools.js`, `src/tools/targets.js`, `src/tools/workspace.js`, & `src/tools/calendar.js`: Definisi & eksekutor tool AI:
+  - `src/tools.js`: Tool utama (`MoneyTracker` read/propose, catatan, reminder, knowledge graph, kalkulator, waktu) + penggabungan tool target tabungan, income/usage, workspace, kalender, riset, & info.
+  - `src/tools/targets.js`: 7 tool untuk target tabungan & cek sisa uang bulan kemarin (`money_list_targets`, `money_list_target_logs`, `money_check_surplus`, `money_propose_create_target`, `money_propose_add_target_deposit`, `money_propose_update_target`, `money_propose_delete_target_log`).
+  - `src/tools/money-extra.js`: 3 tool untuk overview Income & edit persentase Alokasi Kolom B + baca read-only tab `Usage` (`money_get_income_overview`, `money_propose_update_allocations`, `money_get_usage`).
   - `src/tools/workspace.js`: 15 tool terarah untuk Trello, Notion, Superhuman Docs, dan Knowledge Base (termasuk resolusi konteks aktif & disambiguasi kandidat kembar).
   - `src/tools/calendar.js`: 5 tool ketat untuk Google Calendar (`calendar_list_calendars`, `calendar_list_events`, `calendar_propose_create_event`, `calendar_propose_update_event`, `calendar_propose_delete_event`) dengan validasi offset ISO, deteksi bentrok jadwal, disambiguasi, dan `expectedTitle`.
 - `src/handlers/`:
   - `menu.js`: `/start` & `/menu` interaktif (Inline Keyboard in-place via `editMessageText`, tanpa Reply Keyboard) + `BOT_COMMANDS`.
+  - `money-menu.js`: Hub `💰 MoneyTracker` di `/menu` untuk memilih & membaca sheet (`Ringkasan`, `Expenses`, `Income & Alokasi`, `Targets`, `TargetLogs`, `Usage`, `Sisa Bulan Lalu`).
   - `workspace-menu.js`: Sub-menu dinamis live untuk `📋 Trello`, `📓 Notion`, `📄 Superhuman Docs`, dan `🧠 Knowledge Base` dengan pagination & short callback refs.
   - `actions.js`: Runner konfirmasi atomik terpadu (`runPendingConfirmation`) untuk tombol `✅ Simpan` / `❌ Batal` (`action:*` & `money:*`) serta eksekutor mutasi workspace (`executeWorkspaceAction`).
-  - `money.js`: `/catat`, `/keuangan`, `/pengeluaran`, pengiriman grafik PNG, dan delegasi callback `money:*`.
+  - `money.js`: `/catat`, `/keuangan`, `/pengeluaran`, `/target`, pengiriman grafik PNG, dan delegasi callback `money:*`.
   - `messages.js`: Handler chat teks utama dengan injeksi ringkas `active_context`, tool calling, & animasi progress bar.
   - `files.js`: OCR foto (`Tesseract.js`) & ekstraksi PDF/DOCX + deteksi struk transaksi.
   - `tasks.js`: `/catatan`, `/tugas`, `/hapus`, `/update`, `/remind`.

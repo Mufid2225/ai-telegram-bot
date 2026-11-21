@@ -26,6 +26,7 @@ test("BOT_COMMANDS contains clean Nerissa commands without legacy commands", () 
   assert.ok(names.includes("menu"));
   assert.ok(names.includes("keuangan"));
   assert.ok(names.includes("catat"));
+  assert.ok(names.includes("target"));
   for (const legacy of ["whoami", "phone", "pair", "weather", "tools", "skill"]) {
     assert.equal(names.includes(legacy), false, `unexpected legacy command ${legacy}`);
   }
@@ -162,7 +163,7 @@ test("handleMenuCallback exposes live dashboard info and workspace buttons on ho
     assert.match(homeCtx._edits[0].txt, /Reminder Aktif: 1/);
     assert.match(homeCtx._edits[0].txt, /Sheets • Calendar • Trello/);
     const homeCallbacks = homeCtx._edits[0].extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
-    for (const cb of ["menu:ws:trello", "menu:ws:notion", "menu:ws:superhuman", "menu:ws:kb", "menu:ws:calendar"]) {
+    for (const cb of ["menu:money", "menu:ws:trello", "menu:ws:notion", "menu:ws:superhuman", "menu:ws:kb", "menu:ws:calendar"]) {
       assert.ok(homeCallbacks.includes(cb), `missing ${cb}`);
     }
 
@@ -182,4 +183,157 @@ test("handleMenuCallback exposes live dashboard info and workspace buttons on ho
   } finally {
     db.end();
   }
+});
+
+test("handleMenuCallback opens MoneyTracker hub and switches across income, targets, targetlogs, usage, and surplus sheets", async () => {
+  const fakeSheets = {
+    getSummary: async ({ month, year }) => ({
+      month,
+      year,
+      totalIncome: 1500000,
+      totalRealisasi: 1000000,
+      saldo: 500000,
+    }),
+    getIncomeOverview: async () => ({
+      month: "November",
+      year: 2026,
+      incomeSources: [{ source: "Gaji", amount: 5000000 }],
+      totalIncome: 5000000,
+      allocations: [{ kategori: "Makan", percent: 30, monthlyAmount: 1500000 }],
+      totalPercent: 30,
+    }),
+    listTargets: async () => ({
+      targets: [
+        {
+          id: "TGT-001",
+          name: "Monitor 27",
+          targetAmount: 3000000,
+          collectedAmount: 1500000,
+          remainingAmount: 1500000,
+          progressPercent: 50,
+          status: "Aktif",
+          note: "",
+        },
+      ],
+    }),
+    listTargetLogs: async ({ sourcePeriod } = {}) => ({
+      logs: [
+        {
+          logId: "LOG-001",
+          date: "2026-11-05",
+          targetId: "TGT-001",
+          targetName: "Monitor 27",
+          amount: 200000,
+          note: "Sisa uang bulan Oktober",
+          sourcePeriod: "2026-10",
+        },
+      ],
+      totalMatchedAmount: sourcePeriod ? 200000 : 200000,
+    }),
+    getUsage: async () => ({
+      sheetName: "Usage",
+      rows: [["Dompet", "Sisa"], ["Seabank", "Rp 500.000"]],
+      truncatedRows: false,
+      truncatedCols: false,
+    }),
+  };
+
+  const hubCtx = makeCtx("123456789");
+  await handleMenuCallback({ ctx: hubCtx, action: "money", allowedUserId: "123456789", pool: {}, sheetsService: fakeSheets, reminderStore: {} });
+  assert.match(hubCtx._edits[0].txt, /MoneyTracker Hub/);
+  const hubCbs = hubCtx._edits[0].extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  for (const cb of ["menu:summary", "menu:expenses:0", "menu:income", "menu:targets", "menu:targetlogs", "menu:usage", "menu:surplus", "menu:home"]) {
+    assert.ok(hubCbs.includes(cb), `missing ${cb}`);
+  }
+
+  for (const [action, pattern] of [
+    ["income", /Overview Tab Income/],
+    ["targets", /Monitor 27/],
+    ["targetlogs", /LOG-001/],
+    ["usage", /Seabank \| Rp 500\.000/],
+    ["surplus", /Sisa Bebas Belum Dialokasikan: Rp 300\.000/],
+  ]) {
+    const viewCtx = makeCtx("123456789");
+    await handleMenuCallback({
+      ctx: viewCtx,
+      action,
+      allowedUserId: "123456789",
+      pool: {},
+      sheetsService: fakeSheets,
+      reminderStore: {},
+      stepMs: 0,
+      finishDelayMs: 0,
+    });
+    assert.match(viewCtx._edits.at(-1).txt, pattern);
+    const viewCbs = viewCtx._edits.at(-1).extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+    assert.ok(viewCbs.includes("menu:money"), `missing menu:money on ${action}`);
+    assert.ok(viewCbs.includes("menu:home"), `missing menu:home on ${action}`);
+  }
+
+  const pickCtx = makeCtx("123456789");
+  await handleMenuCallback({ ctx: pickCtx, action: "usage:pick", allowedUserId: "123456789", pool: {}, sheetsService: fakeSheets, reminderStore: {} });
+  assert.match(pickCtx._edits[0].txt, /Pilih Bulan Usage/);
+  const pickCbs = pickCtx._edits[0].extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(pickCbs.includes("menu:usage:November"));
+  assert.ok(pickCbs.includes("menu:usage:year"));
+  assert.ok(pickCbs.every((cb) => Buffer.byteLength(cb, "utf8") <= 64));
+
+  let requestedMonth;
+  fakeSheets.getUsage = async (opts = {}) => {
+    requestedMonth = opts.month;
+    return {
+      sheetName: "Usage",
+      structured: true,
+      title: "Penggunaan Tahun 2026",
+      month: opts.month || "November",
+      items: [{ kategori: "Transportasi", percent: 0, amount: 120000 }],
+      total: 120000,
+      monthlyTotals: [
+        { month: "Januari", total: 0 },
+        { month: "November", total: 120000 },
+      ],
+      yearTotal: 120000,
+    };
+  };
+
+  const novCtx = makeCtx("123456789");
+  await handleMenuCallback({ ctx: novCtx, action: "usage:November", allowedUserId: "123456789", pool: {}, sheetsService: fakeSheets, reminderStore: {}, stepMs: 0, finishDelayMs: 0 });
+  assert.equal(requestedMonth, "November");
+  assert.match(novCtx._edits.at(-1).txt, /Transportasi: Rp 120\.000/);
+  const novCbs = novCtx._edits.at(-1).extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(novCbs.includes("menu:usage:pick"));
+  assert.ok(novCbs.includes("menu:usage:year"));
+
+  const yearCtx = makeCtx("123456789");
+  await handleMenuCallback({ ctx: yearCtx, action: "usage:year", allowedUserId: "123456789", pool: {}, sheetsService: fakeSheets, reminderStore: {}, stepMs: 0, finishDelayMs: 0 });
+  assert.match(yearCtx._edits.at(-1).txt, /Rekap Usage/);
+  assert.match(yearCtx._edits.at(-1).txt, /November: Rp 120\.000/);
+
+  const incPickCtx = makeCtx("123456789");
+  await handleMenuCallback({ ctx: incPickCtx, action: "income:pick", allowedUserId: "123456789", pool: {}, sheetsService: fakeSheets, reminderStore: {} });
+  assert.match(incPickCtx._edits[0].txt, /Pilih Bulan Income/);
+  const incPickCbs = incPickCtx._edits[0].extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(incPickCbs.includes("menu:income:Oktober"));
+  assert.ok(incPickCbs.every((cb) => Buffer.byteLength(cb, "utf8") <= 64));
+
+  let requestedIncomeMonth;
+  fakeSheets.getIncomeOverview = async (opts = {}) => {
+    requestedIncomeMonth = opts.month;
+    return {
+      month: opts.month || "November",
+      year: 2026,
+      incomeSources: [{ source: "Gaji Bulanan", amount: 300000 }],
+      totalIncome: 300000,
+      allocations: [{ kategori: "Transportasi", percent: 50, monthlyAmount: 150000 }],
+      totalPercent: 50,
+    };
+  };
+
+  const octIncCtx = makeCtx("123456789");
+  await handleMenuCallback({ ctx: octIncCtx, action: "income:Oktober", allowedUserId: "123456789", pool: {}, sheetsService: fakeSheets, reminderStore: {}, stepMs: 0, finishDelayMs: 0 });
+  assert.equal(requestedIncomeMonth, "Oktober");
+  assert.match(octIncCtx._edits.at(-1).txt, /Oktober 2026/);
+  const octCbs = octIncCtx._edits.at(-1).extra.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(octCbs.includes("menu:income:pick"));
+  assert.ok(octCbs.includes("menu:income:Oktober"));
 });

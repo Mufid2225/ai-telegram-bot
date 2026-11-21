@@ -28,6 +28,11 @@ const MONEY_PENDING_KINDS = new Set([
   "update_expense",
   "delete_expense",
   "upsert_income",
+  "create_target",
+  "add_target_deposit",
+  "update_target",
+  "delete_target_log",
+  "update_allocations",
 ]);
 
 export function buildConfirmExtra(pendingAction) {

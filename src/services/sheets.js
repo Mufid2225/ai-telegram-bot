@@ -41,5 +41,14 @@ export function createSheetsService(config, fetchImpl = fetch) {
     updateExpense: ({ rowNumber, expected, patch }) => request("update_expense", { rowNumber, expected, patch }),
     deleteExpense: ({ rowNumber, expected }) => request("delete_expense", { rowNumber, expected }),
     upsertIncome: (params) => request("upsert_income", params),
+    getIncomeOverview: (params = {}) => request("get_income_overview", params),
+    updateAllocations: (payload) => request("update_allocations", payload),
+    getUsage: (params = {}) => request("get_usage", params),
+    listTargets: (filters = {}) => request("targets_list", filters),
+    listTargetLogs: (filters = {}) => request("targets_logs", filters),
+    createTarget: (payload) => request("targets_create", payload),
+    addTargetDeposit: (payload) => request("targets_add_deposit", payload),
+    updateTarget: (payload) => request("targets_update", payload),
+    deleteTargetLog: (payload) => request("targets_delete_log", payload),
   };
 }

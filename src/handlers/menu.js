@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { normalizeMonthName, formatSummaryText, formatIDR } from "../services/money.js";
+import { normalizeMonthName } from "../services/money.js";
 import { getFinanceChartImage } from "../services/chart.js";
 import { formatFriendlyError } from "../utils/errors.js";
 import { runWithProgress } from "../utils/telegram.js";
@@ -7,14 +7,14 @@ import { sendFinanceChart } from "./money.js";
 import { createWorkspaceStore } from "../services/workspace.js";
 import { handleWorkspaceMenuAction } from "./workspace-menu.js";
 import { infoKeyboard, handleInfoMenuCallback } from "./info-menu.js";
-
-const PAGE_SIZE = 8;
+import { moneyHubView, incomePickerView, usagePickerView, resolveMoneyMenuTask } from "./money-menu.js";
 
 export const BOT_COMMANDS = [
   { command: "menu", description: "Buka menu interaktif Nerissa" },
   { command: "keuangan", description: "Ringkasan MoneyTracker & grafik" },
   { command: "pengeluaran", description: "Daftar pengeluaran terbaru" },
   { command: "catat", description: "Catat pengeluaran atau income" },
+  { command: "target", description: "Lihat & kelola target tabungan" },
   { command: "catatan", description: "Lihat catatan & tugas tersimpan" },
   { command: "remind", description: "Lihat reminder & deadline aktif" },
   { command: "tugas", description: "Lihat daftar tugas" },
@@ -46,8 +46,7 @@ function formatNowHeader(now = new Date()) {
 export function homeKeyboard() {
   return [
     [
-      { text: "💰 Ringkasan Keuangan", callback_data: "menu:summary" },
-      { text: "🧾 Pengeluaran Terbaru", callback_data: "menu:expenses:0" },
+      { text: "💰 MoneyTracker", callback_data: "menu:money" },
     ],
     [
       { text: "📝 Catatan & Tugas", callback_data: "menu:notes" },
@@ -155,9 +154,8 @@ function helpView() {
     text:
       "📖 PANDUAN PAKAI NERISSA\n\n" +
       "1️⃣ Kelola MoneyTracker (Google Sheets)\n" +
-      "• /keuangan — Ringkasan budget & grafik bulan ini\n" +
-      "• /pengeluaran — Lihat daftar transaksi + nomor baris\n" +
-      "• /catat bensin 25rb cash — Catat cepat (muncul tombol Simpan/Batal)\n" +
+      "• /menu → 💰 MoneyTracker untuk pilih sheet (Ringkasan, Expenses, Income & Alokasi, Targets, Setoran, Usage, Sisa Bulan Lalu)\n" +
+      "• /keuangan • /pengeluaran • /catat • /target\n" +
       "• Kirim foto struk / QRIS → otomatis dibaca & disiapkan draft-nya\n\n" +
       "2️⃣ Tanya & Simulasi Budget (Tanpa Nyatat)\n" +
       "• \"Budget 300rb dibagi 4 minggu, transport 50rb/minggu sisanya gimana?\"\n" +
@@ -180,74 +178,12 @@ function helpView() {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "💰 Cek Keuangan", callback_data: "menu:summary" },
+            { text: "💰 MoneyTracker", callback_data: "menu:money" },
             { text: "« Menu Utama", callback_data: "menu:home" },
           ],
         ],
       },
     },
-  };
-}
-
-async function summaryView(sheetsService) {
-  const now = new Date();
-  const summary = await sheetsService.getSummary({
-    month: normalizeMonthName(null, now),
-    year: now.getFullYear(),
-  });
-  return {
-    text: formatSummaryText(summary).slice(0, 4000),
-    extra: {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "🔄 Refresh", callback_data: "menu:summary" },
-            { text: "🧾 Pengeluaran", callback_data: "menu:expenses:0" },
-          ],
-          [
-            { text: "📈 Kirim Grafik PNG", callback_data: "menu:chart" },
-            { text: "« Menu Utama", callback_data: "menu:home" },
-          ],
-        ],
-      },
-    },
-  };
-}
-
-async function expensesView(sheetsService, offsetRaw) {
-  const now = new Date();
-  const month = normalizeMonthName(null, now);
-  const year = now.getFullYear();
-  const rows = await sheetsService.listExpenses({ month, year, limit: 100 });
-  const total = rows.length;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const offset = Math.max(0, Math.min(Number(offsetRaw) || 0, (totalPages - 1) * PAGE_SIZE));
-  const page = Math.floor(offset / PAGE_SIZE) + 1;
-  const slice = rows.slice(offset, offset + PAGE_SIZE);
-
-  const body = slice.length
-    ? slice
-        .map(
-          (e) =>
-            `#${e.rowNumber} | ${e.date} | ${e.uraian} | ${formatIDR(e.nilai)} (${e.kategori} - ${e.bank})`
-        )
-        .join("\n")
-    : "Belum ada pengeluaran untuk bulan ini.";
-
-  const navRow = [];
-  if (offset > 0) navRow.push({ text: "« Sebelumnya", callback_data: `menu:expenses:${Math.max(0, offset - PAGE_SIZE)}` });
-  if (offset + PAGE_SIZE < total) navRow.push({ text: "Berikutnya »", callback_data: `menu:expenses:${offset + PAGE_SIZE}` });
-
-  const keyboard = [];
-  if (navRow.length) keyboard.push(navRow);
-  keyboard.push([
-    { text: "💰 Ringkasan", callback_data: "menu:summary" },
-    { text: "« Menu Utama", callback_data: "menu:home" },
-  ]);
-
-  return {
-    text: `🧾 Pengeluaran ${month} ${year} (Hal ${page}/${totalPages} • Total ${total}):\n\n${body}`.slice(0, 4000),
-    extra: { reply_markup: { inline_keyboard: keyboard } },
   };
 }
 
@@ -416,11 +352,14 @@ export async function handleMenuCallback({
     kbService,
   };
   if (action === "home") return await safeEdit(ctx, await homeView(homeDeps));
+  if (action === "money") return await safeEdit(ctx, moneyHubView());
+  if (action === "income:pick") return await safeEdit(ctx, incomePickerView());
+  if (action === "usage:pick") return await safeEdit(ctx, usagePickerView());
   if (action === "help") return await safeEdit(ctx, helpView());
 
   const loadView = () => {
-    if (action === "summary") return summaryView(sheetsService);
-    if (action.startsWith("expenses:")) return expensesView(sheetsService, action.split(":")[1]);
+    const moneyTask = resolveMoneyMenuTask(action, sheetsService);
+    if (moneyTask) return moneyTask();
     if (action === "notes") return notesView(pool, userId);
     if (action === "reminders") return remindersView(pool, reminderStore, userId);
     if (action.startsWith("ws:")) {

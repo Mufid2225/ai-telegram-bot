@@ -32,7 +32,9 @@ CPI, Fed Rate, inflasi, GDP, pengangguran, Treasury Yield, Retail Sales, WTI, em
 Single source of truth di Google Sheets via Apps Script Web App:
 - `/keuangan` — ringkasan Dashboard + grafik PNG
 - `/pengeluaran` — daftar transaksi terbaru + nomor baris
-- `/catat`, chat natural, atau foto struk/QRIS → draft transaksi dengan konfirmasi `[✅ Simpan]` / `[❌ Batal]`
+- `/catat`, chat natural, atau foto struk/QRIS → draft transaksi, income (tambah sumber baru/nilai), atau ubah persentase tabel Alokasi dengan konfirmasi `[✅ Simpan]` / `[❌ Batal]`
+- Read-only `Usage` (`money_get_usage`) & overview `Income` (`money_get_income_overview`) lewat chat tanpa menyentuh rumus spreadsheet
+- `/target` atau chat natural — target tabungan (`Targets` & `TargetLogs` dengan formula `SUMIF` dan tampilan serasi) + cek & alokasi sisa uang bulan kemarin dengan konfirmasi tombol
 - Konsultasi budget & simulasi mingguan tanpa mencatat transaksi palsu
 
 ### 6. Catatan, Tugas & Reminder Persisten
@@ -53,7 +55,7 @@ Chain provider: **Tavily** (primer) → **NewsAPI** → **SerpAPI** → fallback
 
 ## Menu Interaktif Dua Halaman
 
-`/menu` (atau `/start`) membuka hub dengan status cepat. Tombol **➡️ Info & Riset** mengganti **hanya keyboard** (teks pesan tetap) ke halaman 2:
+`/menu` (atau `/start`) membuka hub dengan status cepat dan tombol **`💰 MoneyTracker`** (untuk memilih sheet: Ringkasan, Expenses, Income & Alokasi, Targets, Riwayat Setoran, Usage, dan Sisa Bulan Lalu). Tombol **➡️ Info & Riset** mengganti **hanya keyboard** (teks pesan tetap) ke halaman 2:
 
 | Tombol | Perilaku |
 |--------|----------|
@@ -68,9 +70,10 @@ Chain provider: **Tavily** (primer) → **NewsAPI** → **SerpAPI** → fallback
 ```
  Telegram (Telegraf, allowlist single-user)
    │  middleware: allowlist → guard pembatal state input → handlers
-   ├─ handlers/   menu (2 halaman), info-menu (prompt+routing), messages (chat+tool loop),
-   │              money, market, tasks, files, actions (konfirmasi), workspace-menu
+   ├─ handlers/   menu (2 halaman), money-menu (hub sheet MoneyTracker), info-menu (prompt+routing),
+   │              messages (chat+tool loop), money, market, tasks, files, actions, workspace-menu
    ├─ tools.js    gabungan AI tools: money/catatan/reminder/knowledge
+   │              + tools/targets (7) + tools/money-extra (3)
    │              + tools/workspace (15) + tools/calendar (5)
    │              + tools/research (7) + tools/info (7)
    ├─ services/   ai (router OpenAI-compatible, retry/backoff, maxSteps 8)
@@ -216,7 +219,7 @@ src/
 ├── database.js    # Schema SQLite & pool
 ├── memory.js      # Knowledge graph & memory
 ├── tools.js       # Registrasi + dispatch gabungan AI tools
-├── tools/         # workspace (15), calendar (5), research (7), info (7)
+├── tools/         # targets (7), money-extra (3), workspace (15), calendar (5), research (7), info (7)
 ├── handlers/      # menu, info-menu, workspace-menu, actions, money, market,
 │                  # tasks, files, messages
 ├── services/      # ai, sheets, calendar, trello, notion, superhuman, kb,

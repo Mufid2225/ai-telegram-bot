@@ -5,6 +5,8 @@ export const MONTHS_ID = [
   "Juli", "Agustus", "September", "Oktober", "November", "Desember",
 ];
 
+export const TARGET_STATUSES = ["Aktif", "Tercapai", "Ditunda", "Arsip"];
+
 const MONTH_ALIASES = new Map([
   ["jan", "Januari"], ["januari", "Januari"], ["january", "Januari"],
   ["feb", "Februari"], ["februari", "Februari"], ["february", "Februari"],
@@ -112,7 +114,152 @@ export function formatDraftPreview(kind, payload) {
     const verb = payload.mode === "add" ? "Tambah" : "Set";
     return `💵 Draft ${verb} Income:\n- Sumber: ${payload.source}\n- Bulan: ${payload.month}${payload.year ? ` ${payload.year}` : ""}\n- Nominal: ${formatIDR(payload.amount)}`;
   }
+  if (kind === "create_target") {
+    return (
+      `🎯 Draft Buat Target Tabungan:\n` +
+      `- Nama: ${payload.name}\n` +
+      `- Target: ${formatIDR(payload.targetAmount)}\n` +
+      `- Status: ${payload.status || "Aktif"}\n` +
+      `- Catatan: ${payload.note || "-"}`
+    );
+  }
+  if (kind === "add_target_deposit") {
+    const lines = [
+      `💰 Draft Setoran Target Tabungan:`,
+      `- Target: ${payload.targetName} (${payload.targetId})`,
+      `- Nominal: ${formatIDR(payload.amount)}`,
+      `- Tanggal: ${payload.date || todayIso()}`,
+      `- Keterangan: ${payload.note || "-"}`,
+    ];
+    if (payload.sourcePeriod) lines.push(`- Sumber Periode: ${payload.sourcePeriod}`);
+    if (payload.overSurplusWarning) lines.push(`\n⚠️ ${payload.overSurplusWarning}`);
+    return lines.join("\n");
+  }
+  if (kind === "update_target") {
+    const patch = payload.patch || {};
+    const changes = Object.entries(patch)
+      .map(([k, v]) => `- ${k}: ${k === "targetAmount" ? formatIDR(v) : v || "-"}`)
+      .join("\n");
+    return `✏️ Draft Ubah Target (${payload.targetId} • ${payload.targetName}):\n${changes}`;
+  }
+  if (kind === "delete_target_log") {
+    const exp = payload.expected || {};
+    return (
+      `🗑️ Draft Hapus Log Setoran (${payload.logId}):\n` +
+      `- Target: ${exp.targetName || exp.targetId || "-"}\n` +
+      `- Tanggal: ${exp.date || "-"}\n` +
+      `- Nominal: ${formatIDR(exp.amount || 0)}`
+    );
+  }
+  if (kind === "update_allocations") {
+    const lines = (payload.updates || []).map(
+      (u) => `- ${u.kategori}: ${formatPercentLabel(u.oldPercent)} → ${formatPercentLabel(u.newPercent)}`
+    );
+    const totalLine = `Total Alokasi Baru: ${formatPercentLabel(payload.newTotalPercent ?? 0)}`;
+    const warn = Math.abs(Number(payload.newTotalPercent || 0) - 100) > 0.01
+      ? `\n⚠️ Total alokasi menjadi ${formatPercentLabel(payload.newTotalPercent)} (belum 100%).`
+      : "";
+    return `📊 Draft Ubah Alokasi Income:\n${lines.join("\n")}\n\n${totalLine}${warn}`;
+  }
   return "📝 Draft aksi Google Sheets";
+}
+
+export function toSourcePeriod(monthName, year) {
+  const normalized = normalizeMonthName(monthName);
+  const idx = MONTHS_ID.indexOf(normalized);
+  if (idx === -1) throw new Error(`Bulan tidak valid: "${monthName}"`);
+  return `${Number(year)}-${String(idx + 1).padStart(2, "0")}`;
+}
+
+export function getPreviousMonthPeriod(now = new Date()) {
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const month = MONTHS_ID[prev.getMonth()];
+  const year = prev.getFullYear();
+  return { month, year, sourcePeriod: toSourcePeriod(month, year) };
+}
+
+export async function calculateMonthlySurplus({ sheetsService, month, year }) {
+  const targetMonth = normalizeMonthName(month);
+  const targetYear = Number(year) || new Date().getFullYear();
+  const sourcePeriod = toSourcePeriod(targetMonth, targetYear);
+  const [summary, logsRes] = await Promise.all([
+    sheetsService.getSummary({ month: targetMonth, year: targetYear }),
+    sheetsService.listTargetLogs({ sourcePeriod, limit: 100 }),
+  ]);
+  const saldo = Math.round(Number(summary?.saldo || 0));
+  const allocatedAmount = Math.round(Number(logsRes?.totalMatchedAmount || 0));
+  const availableSurplus = Math.max(0, saldo - allocatedAmount);
+  return {
+    month: summary?.month || targetMonth,
+    year: summary?.year || targetYear,
+    sourcePeriod,
+    totalIncome: Math.round(Number(summary?.totalIncome || 0)),
+    totalRealisasi: Math.round(Number(summary?.totalRealisasi || 0)),
+    saldo,
+    allocatedAmount,
+    availableSurplus,
+  };
+}
+
+export function renderProgressBar(percent, width = 10) {
+  const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
+  const filled = Math.round((clamped / 100) * width);
+  return `[${"█".repeat(filled)}${"░".repeat(width - filled)}]`;
+}
+
+function formatPercentLabel(percent) {
+  const num = Number(percent) || 0;
+  return Number.isInteger(num) ? `${num}%` : `${num.toFixed(1)}%`;
+}
+
+export function formatTargetsList(targets) {
+  if (!targets?.length) {
+    return "🎯 Belum ada target tabungan tersimpan.\nContoh: /target beli monitor 3jt";
+  }
+  const lines = targets.map((t, idx) => {
+    const pct = Number(t.progressPercent || 0);
+    const bar = `${renderProgressBar(pct)} ${formatPercentLabel(pct)}`;
+    const details = [`   Kurang: ${formatIDR(t.remainingAmount)}`];
+    if (t.note) details.push(`Catatan: ${t.note}`);
+    return (
+      `${idx + 1}. ${t.id} • ${t.name} (${t.status})\n` +
+      `   ${bar} • ${formatIDR(t.collectedAmount)} / ${formatIDR(t.targetAmount)}\n` +
+      details.join(" | ")
+    );
+  });
+  return `🎯 Daftar Target Tabungan (${targets.length} target):\n\n${lines.join("\n\n")}`;
+}
+
+export function formatTargetLogsList(logs, label = "") {
+  if (!logs?.length) return `📭 Belum ada riwayat setoran${label ? ` untuk ${label}` : ""}.`;
+  const lines = logs.map((l) => {
+    const extras = [];
+    if (l.note) extras.push(l.note);
+    if (l.sourcePeriod) extras.push(`Periode ${l.sourcePeriod}`);
+    const suffix = extras.length ? ` (${extras.join(" • ")})` : "";
+    return `${l.logId} | ${l.date} | ${l.targetName} (${l.targetId}) | +${formatIDR(l.amount)}${suffix}`;
+  });
+  return `📒 Riwayat Setoran Target${label ? ` (${label})` : ""}:\n\n${lines.join("\n")}`;
+}
+
+export function formatSurplusSummary(surplus, activeTargets = []) {
+  const lines = [
+    `💰 Rekap Sisa Uang ${surplus.month} ${surplus.year} (${surplus.sourcePeriod}):`,
+    `- Total Income: ${formatIDR(surplus.totalIncome)}`,
+    `- Total Pengeluaran: ${formatIDR(surplus.totalRealisasi)}`,
+    `- Saldo Akhir Bulan: ${formatIDR(surplus.saldo)}`,
+    `- Sudah Dialokasikan ke Target: ${formatIDR(surplus.allocatedAmount)}`,
+    `- Sisa Bebas Belum Dialokasikan: ${formatIDR(surplus.availableSurplus)}`,
+  ];
+  if (activeTargets.length) {
+    lines.push("", "🎯 Target Aktif:");
+    for (const t of activeTargets) {
+      lines.push(`- ${t.id} • ${t.name}: terkumpul ${formatIDR(t.collectedAmount)} / ${formatIDR(t.targetAmount)} (kurang ${formatIDR(t.remainingAmount)})`);
+    }
+  } else {
+    lines.push("", "Belum ada target tabungan aktif.");
+  }
+  return lines.join("\n");
 }
 
 export function formatSummaryText(summary) {
@@ -160,5 +307,98 @@ export async function executeConfirmedAction(action, sheetsService) {
     const res = await sheetsService.upsertIncome(payload);
     return `Income "${res?.source || payload.source}" bulan ${res?.month || payload.month} tersimpan: ${formatIDR(res?.amount ?? payload.amount)}.`;
   }
+  if (kind === "create_target") {
+    const created = await sheetsService.createTarget(payload);
+    return `Target "${created?.name || payload.name}" (${created?.id || "-"}) dibuat dengan target ${formatIDR(created?.targetAmount ?? payload.targetAmount)}.`;
+  }
+  if (kind === "add_target_deposit") {
+    const res = await sheetsService.addTargetDeposit(payload);
+    const t = res?.target || {};
+    const pct = formatPercentLabel(t.progressPercent ?? 0);
+    const statusNote = t.status === "Tercapai" ? "\n🎉 Selamat! Target ini sudah tercapai!" : "";
+    return (
+      `Setoran ${formatIDR(payload.amount)} ke target "${t.name || payload.targetName}" (${res?.log?.logId || "-"}) tersimpan.\n` +
+      `Progres sekarang: ${formatIDR(t.collectedAmount ?? 0)} / ${formatIDR(t.targetAmount ?? 0)} (${pct})${statusNote}`
+    );
+  }
+  if (kind === "update_target") {
+    const updated = await sheetsService.updateTarget(payload);
+    return `Target "${updated?.name || payload.targetName}" (${payload.targetId}) diperbarui (Status: ${updated?.status || "-"}).`;
+  }
+  if (kind === "delete_target_log") {
+    await sheetsService.deleteTargetLog(payload);
+    return `Log setoran ${payload.logId} berhasil dihapus dari Google Sheets TargetLogs.`;
+  }
+  if (kind === "update_allocations") {
+    const res = await sheetsService.updateAllocations({
+      updates: (payload.updates || []).map((u) => ({
+        kategori: u.kategori,
+        percent: u.newPercent ?? u.percent,
+        expectedPercent: u.expectedPercent,
+      })),
+    });
+    const list = (res?.updated || [])
+      .map((u) => `- ${u.kategori}: ${formatPercentLabel(u.oldPercent)} → ${formatPercentLabel(u.newPercent)}`)
+      .join("\n");
+    const totalPct = formatPercentLabel(res?.totalPercent ?? payload.newTotalPercent ?? 0);
+    return `Alokasi Income berhasil diperbarui:\n${list}\nTotal Alokasi sekarang: ${totalPct}.`;
+  }
   throw new Error(`Aksi tidak dikenal: ${kind}`);
+}
+
+export function formatIncomeOverviewText(overview) {
+  const sources = (overview?.incomeSources || []).map(
+    (s) => `- ${s.source}: ${formatIDR(s.amount)}`
+  );
+  const allocs = (overview?.allocations || []).map((a) => {
+    const amt = a.monthlyAmount !== undefined ? ` (${formatIDR(a.monthlyAmount)})` : "";
+    return `- ${a.kategori}: ${formatPercentLabel(a.percent)}${amt}`;
+  });
+  return (
+    `💵 Overview Tab Income (${overview?.month || "-"} ${overview?.year || ""})\n\n` +
+    `Sumber Pemasukan (Total ${formatIDR(overview?.totalIncome || 0)}):\n` +
+    `${sources.join("\n") || "- Belum ada sumber income"}\n\n` +
+    `Alokasi Anggaran (Total Alokasi: ${formatPercentLabel(overview?.totalPercent || 0)}):\n` +
+    `${allocs.join("\n") || "- Belum ada baris alokasi"}`
+  );
+}
+
+export function formatUsageText(usage, { view = "month" } = {}) {
+  if (usage?.structured) {
+    const title = usage.title || "Penggunaan";
+    if (view === "year") {
+      const months = (usage.monthlyTotals || []).map((m) => `- ${m.month}: ${formatIDR(m.total)}`);
+      return (
+        `📊 Rekap Usage — ${title} (Jan–Des)\n\n` +
+        `${months.join("\n") || "- Belum ada data"}\n\n` +
+        `💰 Total: ${formatIDR(usage.yearTotal ?? 0)}`
+      );
+    }
+
+    const total = Number(usage.total || 0);
+    const items = (usage.items || []).map((item) => {
+      const share = Number(item.percent) > 0
+        ? Number(item.percent)
+        : total > 0
+          ? Number(((Number(item.amount || 0) / total) * 100).toFixed(1))
+          : 0;
+      const pctSuffix = share > 0 ? ` (${formatPercentLabel(share)})` : "";
+      return `- ${item.kategori}: ${formatIDR(item.amount)}${pctSuffix}`;
+    });
+    return (
+      `📋 Usage — ${title}\n` +
+      `Bulan: ${usage.month || "-"}\n\n` +
+      `${items.join("\n") || "- Belum ada kategori"}\n\n` +
+      `💰 Total Realisasi ${usage.month || ""}: ${formatIDR(total)}`
+    );
+  }
+
+  const rows = usage?.rows || [];
+  if (!rows.length) return "📭 Tab Usage masih kosong.";
+  const lines = rows.map((row) => row.join(" | "));
+  const notes = [];
+  if (usage?.truncatedRows) notes.push("baris terpotong");
+  if (usage?.truncatedCols) notes.push("kolom terpotong");
+  const suffix = notes.length ? `\n\n(Sebagian ${notes.join(" & ")} karena batas tampilan.)` : "";
+  return `📒 Data Tab Usage (Read-Only):\n\n${lines.join("\n")}${suffix}`;
 }

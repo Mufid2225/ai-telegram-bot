@@ -2,6 +2,7 @@ import {
   normalizeMonthName,
   formatSummaryText,
   formatExpensesList,
+  formatTargetsList,
   executeConfirmedAction,
 } from "../services/money.js";
 import { getFinanceChartImage } from "../services/chart.js";
@@ -21,6 +22,16 @@ const MONEY_TOOL_NAMES = new Set([
   "money_propose_update_expense",
   "money_propose_delete_expense",
   "money_propose_upsert_income",
+  "money_list_targets",
+  "money_list_target_logs",
+  "money_check_surplus",
+  "money_propose_create_target",
+  "money_propose_add_target_deposit",
+  "money_propose_update_target",
+  "money_propose_delete_target_log",
+  "money_get_income_overview",
+  "money_propose_update_allocations",
+  "money_get_usage",
 ]);
 
 const moneyTools = tools.filter((t) => MONEY_TOOL_NAMES.has(t.function.name));
@@ -76,7 +87,55 @@ export async function sendFinanceChart(ctx, chart, caption) {
   return false;
 }
 
+export async function handleTargetCommand({ ctx, callAI, pool, sheetsService, pendingStore, reminderStore, dateStr }) {
+  const input = String(ctx.message?.text || "").replace(/^\/target(?:@\S+)?\s*/i, "").trim();
+  if (!input) {
+    return runWithTyping({
+      ctx,
+      task: () => sheetsService.listTargets(),
+      formatText: (res) =>
+        `${formatTargetsList(res?.targets || [])}\n\n` +
+        `Tips: /target beli SSD 1.5jt • /target nabung SSD 300rb • atau chat "cek sisa uang bulan kemarin"`,
+      onError: (error) => {
+        console.error("/target error:", error);
+        return formatFriendlyError(error, "membaca daftar target tabungan");
+      },
+    });
+  }
+
+  const toolContext = { userId: String(ctx.from.id), pool, sheetsService, pendingStore, reminderStore };
+  return runWithTyping({
+    ctx,
+    task: () => callAI(
+      [
+        {
+          role: "system",
+          content: buildSystemPrompt(
+            `Mode: /target Tabungan MoneyTracker.\nHari ini: ${dateStr}.\n` +
+            `Aturan:\n` +
+            `- Panggil money_list_targets / money_list_target_logs / money_check_surplus terlebih dahulu sesuai kebutuhan user.\n` +
+            `- Untuk menambah target baru, mencatat setoran, mengubah target, atau menghapus log setoran, WAJIB buat draft lewat money_propose_create_target / money_propose_add_target_deposit / money_propose_update_target / money_propose_delete_target_log.\n` +
+            `- Jika user ingin mengalokasikan sisa uang bulan kemarin, panggil money_check_surplus dulu lalu sertakan sourcePeriod (YYYY-MM) dan catatan "Sisa uang bulan <Bulan>" saat membuat draft setoran.\n` +
+            `- Jika target ambigu atau nominal belum jelas, tanyakan ramah tanpa membuat draft.`
+          ),
+        },
+        { role: "user", content: input },
+      ],
+      ctx,
+      { tools: moneyTools, executeTool, toolContext }
+    ),
+    getPendingAction: () => toolContext.pendingAction,
+    onError: (error) => {
+      console.error("/target error:", error);
+      return formatFriendlyError(error, "memproses /target");
+    },
+  });
+}
+
 export function registerMoneyHandlers(bot, { config, callAI, pool, sheetsService, pendingStore, reminderStore, dateStr }) {
+  bot.command("target", (ctx) =>
+    handleTargetCommand({ ctx, callAI, pool, sheetsService, pendingStore, reminderStore, dateStr })
+  );
   bot.command("catat", async (ctx) => {
     const input = ctx.message.text.replace(/^\/catat(?:@\S+)?\s*/i, "").trim();
     if (!input) {
@@ -100,8 +159,9 @@ export function registerMoneyHandlers(bot, { config, callAI, pool, sheetsService
               `Mode: /catat MoneyTracker.\nHari ini: ${dateStr}.\n` +
               `Aturan:\n` +
               `- Panggil money_get_options dulu untuk melihat daftar Bank dan Kategori valid di spreadsheet.\n` +
-              `- Jika user mengedit atau menghapus, panggil money_list_expenses dulu untuk mencari rowNumber yang tepat.\n` +
-              `- Buat draft dengan money_propose_add_expenses / money_propose_update_expense / money_propose_delete_expense / money_propose_upsert_income.\n` +
+              `- Jika user mengedit atau menghapus pengeluaran, panggil money_list_expenses dulu untuk mencari rowNumber yang tepat.\n` +
+              `- Jika user ingin melihat/mengubah persentase alokasi di tab Income, panggil money_get_income_overview lalu buat draft lewat money_propose_update_allocations.\n` +
+              `- Buat draft dengan money_propose_add_expenses / money_propose_update_expense / money_propose_delete_expense / money_propose_upsert_income / money_propose_update_allocations.\n` +
               `- Jika ada data wajib yang benar-benar kurang atau ambigu (misal nominal tidak ada), tanyakan ramah dan singkat tanpa membuat draft.`
             ),
           },

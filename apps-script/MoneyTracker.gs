@@ -67,6 +67,11 @@ function doPost(e) {
 
     var ss = SpreadsheetApp.getActiveSpreadsheet();
 
+    if (action.indexOf("targets_") === 0) {
+      data = handleTargetAction(ss, action, body);
+      return jsonResponse({ ok: true, data: data });
+    }
+
     switch (action) {
       case "get_context":
         data = handleGetContext(ss);
@@ -88,6 +93,15 @@ function doPost(e) {
         break;
       case "upsert_income":
         data = handleUpsertIncome(ss, body);
+        break;
+      case "get_income_overview":
+        data = handleGetIncomeOverview(ss, body);
+        break;
+      case "update_allocations":
+        data = handleUpdateAllocations(ss, body);
+        break;
+      case "get_usage":
+        data = handleGetUsage(ss, body);
         break;
       default:
         return jsonResponse({ ok: false, error: "Action tidak dikenal: " + action });
@@ -574,6 +588,243 @@ function handleUpsertIncome(ss, params) {
   return { source: source, month: month, amount: finalAmt, rowNumber: targetRow };
 }
 
+function readAllocationPercentRow(sheet, rowNum, rawVal, dispVal) {
+  var cellFmt = String(sheet.getRange(rowNum, 2).getNumberFormat() || "");
+  var isPctFmt = cellFmt.indexOf("%") !== -1 || String(dispVal || "").indexOf("%") !== -1;
+  var pct;
+  if (isPctFmt && typeof rawVal === "number") {
+    pct = Number((rawVal * 100).toFixed(2));
+  } else {
+    pct = Number(parseNumber(rawVal).toFixed(2));
+  }
+  return { percent: pct, isPercentFormatted: isPctFmt };
+}
+
+function readAllocationsList(ss, incomeData, month) {
+  if (incomeData.allocHeaderRow === -1 || incomeData.allocTotalRow === -1) {
+    return { allocations: [], totalPercent: 0 };
+  }
+  var allocMonthCol = findMonthCol(incomeData.disp[incomeData.allocHeaderRow - 1], month);
+  var allocations = [];
+  var totalPercent = 0;
+  for (var r = incomeData.allocHeaderRow + 1; r < incomeData.allocTotalRow; r++) {
+    var kat = String(incomeData.disp[r - 1][0] || "").trim();
+    if (!kat) continue;
+    var pctInfo = readAllocationPercentRow(incomeData.sheet, r, incomeData.raw[r - 1][1], incomeData.disp[r - 1][1]);
+    var monthlyAmt = allocMonthCol !== -1 ? parseNumber(incomeData.raw[r - 1][allocMonthCol - 1]) : 0;
+    allocations.push({
+      rowNumber: r,
+      kategori: kat,
+      percent: pctInfo.percent,
+      isPercentFormatted: pctInfo.isPercentFormatted,
+      monthlyAmount: monthlyAmt,
+    });
+    totalPercent += pctInfo.percent;
+  }
+  return { allocations: allocations, totalPercent: Number(totalPercent.toFixed(2)) };
+}
+
+function handleGetIncomeOverview(ss, params) {
+  var active = getDashboardPeriod(ss);
+  var month = String((params && params.month) || active.month || MONTHS_ID[new Date().getMonth()]).trim();
+  var year = Number(params && params.year) || active.year || new Date().getFullYear();
+
+  var incomeData = readIncomeSheetData(ss);
+  var incomeSources = [];
+  var totalIncome = 0;
+  if (incomeData.incomeHeaderRow !== -1 && incomeData.incomeTotalRow !== -1) {
+    var monthCol = findMonthCol(incomeData.disp[incomeData.incomeHeaderRow - 1], month);
+    for (var r = incomeData.incomeHeaderRow + 1; r < incomeData.incomeTotalRow; r++) {
+      var sourceName = String(incomeData.disp[r - 1][0] || "").trim();
+      if (!sourceName) continue;
+      var amt = monthCol !== -1 ? parseNumber(incomeData.raw[r - 1][monthCol - 1]) : 0;
+      incomeSources.push({ rowNumber: r, source: sourceName, amount: amt });
+      totalIncome += amt;
+    }
+  }
+
+  var allocResult = readAllocationsList(ss, incomeData, month);
+  return {
+    month: month,
+    year: year,
+    incomeSources: incomeSources,
+    totalIncome: totalIncome,
+    allocations: allocResult.allocations,
+    totalPercent: allocResult.totalPercent,
+  };
+}
+
+function handleUpdateAllocations(ss, params) {
+  var updates = (params && params.updates) || [];
+  if (!updates.length) throw new Error("Daftar perubahan alokasi kosong.");
+
+  var data = readIncomeSheetData(ss);
+  if (data.allocHeaderRow === -1 || data.allocTotalRow === -1) {
+    throw new Error("Struktur tabel Alokasi (header 'Alokasi' / 'Total') tidak ditemukan di tab Income.");
+  }
+
+  var active = getDashboardPeriod(ss);
+  var current = readAllocationsList(ss, data, active.month).allocations;
+  var byKey = {};
+  for (var i = 0; i < current.length; i++) {
+    byKey[current[i].kategori.toLowerCase()] = current[i];
+  }
+
+  var applied = [];
+  for (var j = 0; j < updates.length; j++) {
+    var upd = updates[j];
+    var katName = String(upd.kategori || "").trim();
+    var pct = Number(upd.percent);
+    if (!katName) throw new Error("Nama kategori alokasi wajib diisi.");
+    if (!isFinite(pct) || pct < 0 || pct > 100) {
+      throw new Error("Persentase alokasi untuk '" + katName + "' harus antara 0 sampai 100.");
+    }
+    var match = byKey[katName.toLowerCase()];
+    if (!match) {
+      throw new Error("Kategori '" + katName + "' tidak ditemukan di tabel Alokasi.");
+    }
+    if (upd.expectedPercent !== undefined && Math.abs(match.percent - Number(upd.expectedPercent)) > 0.05) {
+      throw new Error("Persentase '" + match.kategori + "' sudah berubah (sekarang: " + match.percent + "%). Silakan cek ulang.");
+    }
+    var cell = data.sheet.getRange(match.rowNumber, 2);
+    if (cell.getFormula()) {
+      throw new Error("Sel persentase '" + match.kategori + "' berisi formula dan tidak boleh ditimpa.");
+    }
+    var writeVal = match.isPercentFormatted ? Number((pct / 100).toFixed(4)) : Number(pct.toFixed(2));
+    cell.setValue(writeVal);
+    applied.push({
+      rowNumber: match.rowNumber,
+      kategori: match.kategori,
+      oldPercent: match.percent,
+      newPercent: Number(pct.toFixed(2)),
+    });
+  }
+
+  SpreadsheetApp.flush();
+  var refreshed = readAllocationsList(ss, readIncomeSheetData(ss), active.month);
+  return { updated: applied, totalPercent: refreshed.totalPercent };
+}
+
+function handleGetUsage(ss, params) {
+  var sheet = ss.getSheetByName("Usage");
+  if (!sheet) throw new Error("Tab 'Usage' tidak ditemukan.");
+
+  var maxRows = Math.min(Math.max(Number(params && params.maxRows) || 60, 1), 120);
+  var maxCols = Math.min(Math.max(Number(params && params.maxCols) || 16, 1), 24);
+  var totalRows = sheet.getLastRow();
+  var totalCols = sheet.getLastColumn();
+  if (totalRows < 1 || totalCols < 1) {
+    return { sheetName: "Usage", rows: [], truncatedRows: false, truncatedCols: false };
+  }
+
+  var readRows = Math.min(totalRows, maxRows);
+  var readCols = Math.min(totalCols, maxCols);
+  var raw = sheet.getRange(1, 1, readRows, readCols).getValues();
+  var disp = sheet.getRange(1, 1, readRows, readCols).getDisplayValues();
+
+  var headerRow = -1;
+  var totalRow = -1;
+  var titleText = "";
+  for (var r = 0; r < disp.length; r++) {
+    var colA = String(disp[r][0] || "").trim();
+    var colALower = colA.toLowerCase();
+    if (headerRow === -1) {
+      if (colALower === "realisasi" || findMonthCol(disp[r], "Januari") !== -1) {
+        headerRow = r;
+      } else if (!titleText) {
+        for (var c0 = 0; c0 < disp[r].length; c0++) {
+          var v0 = String(disp[r][c0] || "").trim();
+          if (v0) { titleText = v0; break; }
+        }
+      }
+    } else if (colALower === "total" && totalRow === -1) {
+      totalRow = r;
+      break;
+    }
+  }
+
+  if (headerRow !== -1) {
+    var monthCols = [];
+    for (var m = 0; m < MONTHS_ID.length; m++) {
+      var mCol = findMonthCol(disp[headerRow], MONTHS_ID[m]);
+      if (mCol !== -1) monthCols.push({ month: MONTHS_ID[m], col: mCol });
+    }
+    if (monthCols.length) {
+      var active = getDashboardPeriod(ss);
+      var requestedMonth = String((params && params.month) || active.month || MONTHS_ID[new Date().getMonth()]).trim();
+      var selected = monthCols[0];
+      for (var s = 0; s < monthCols.length; s++) {
+        if (monthCols[s].month.toLowerCase() === requestedMonth.toLowerCase()) {
+          selected = monthCols[s];
+          break;
+        }
+      }
+
+      var endRow = totalRow !== -1 ? totalRow : disp.length;
+      var items = [];
+      var sumMonth = 0;
+      for (var r2 = headerRow + 1; r2 < endRow; r2++) {
+        var kat = String(disp[r2][0] || "").trim();
+        if (!kat) continue;
+        var pctInfo = readAllocationPercentRow(sheet, r2 + 1, raw[r2][1], disp[r2][1]);
+        var amt = parseNumber(raw[r2][selected.col - 1]);
+        sumMonth += amt;
+        items.push({ kategori: kat, percent: pctInfo.percent, amount: amt });
+      }
+
+      var monthTotal = totalRow !== -1 ? parseNumber(raw[totalRow][selected.col - 1]) : sumMonth;
+      var monthlyTotals = [];
+      var yearTotal = 0;
+      for (var mt = 0; mt < monthCols.length; mt++) {
+        var mc = monthCols[mt];
+        var mTotal = 0;
+        if (totalRow !== -1) {
+          mTotal = parseNumber(raw[totalRow][mc.col - 1]);
+        } else {
+          for (var r3 = headerRow + 1; r3 < endRow; r3++) {
+            if (String(disp[r3][0] || "").trim()) mTotal += parseNumber(raw[r3][mc.col - 1]);
+          }
+        }
+        yearTotal += mTotal;
+        monthlyTotals.push({ month: mc.month, total: mTotal });
+      }
+
+      return {
+        sheetName: "Usage",
+        structured: true,
+        title: titleText || "Penggunaan",
+        month: selected.month,
+        availableMonths: monthCols.map(function (mc) { return mc.month; }),
+        items: items,
+        total: monthTotal,
+        monthlyTotals: monthlyTotals,
+        yearTotal: yearTotal,
+      };
+    }
+  }
+
+  var rows = [];
+  for (var rr = 0; rr < disp.length; rr++) {
+    var trimmed = [];
+    var lastNonEmpty = -1;
+    for (var cc = 0; cc < disp[rr].length; cc++) {
+      var val = String(disp[rr][cc] || "").trim();
+      trimmed.push(val);
+      if (val) lastNonEmpty = cc;
+    }
+    if (lastNonEmpty !== -1) {
+      rows.push(trimmed.slice(0, lastNonEmpty + 1));
+    }
+  }
+
+  return {
+    sheetName: "Usage",
+    rows: rows,
+    truncatedRows: totalRows > readRows,
+    truncatedCols: totalCols > readCols,
+  };
+}
+
 // ============================================================================
 // GOOGLE CALENDAR HANDLERS
 // ============================================================================
@@ -789,4 +1040,431 @@ function handleCalendarDeleteEvent(params) {
   var oldTitle = ev.getTitle() || "(Tanpa Judul)";
   ev.deleteEvent();
   return { deleted: true, eventId: eventId, title: oldTitle };
+}
+
+// ============================================================================
+// SAVINGS TARGETS HANDLERS (Targets & TargetLogs)
+// ============================================================================
+
+var TARGET_STATUSES = ["Aktif", "Tercapai", "Ditunda", "Arsip"];
+
+function handleTargetAction(ss, action, body) {
+  switch (action) {
+    case "targets_list":
+      return handleTargetsList(ss, body);
+    case "targets_logs":
+      return handleTargetsLogs(ss, body);
+    case "targets_create":
+      return handleTargetsCreate(ss, body);
+    case "targets_add_deposit":
+      return handleTargetsAddDeposit(ss, body);
+    case "targets_update":
+      return handleTargetsUpdate(ss, body);
+    case "targets_delete_log":
+      return handleTargetsDeleteLog(ss, body);
+    default:
+      throw new Error("Action target tidak dikenal: " + action);
+  }
+}
+
+function getReferenceHeaderStyle(ss) {
+  var fallback = {
+    bg: "#1E7E34",
+    fg: "#FFFFFF",
+    fontFamily: "Arial",
+    fontSize: 10,
+  };
+  var candidates = [
+    { name: "Expenses", rows: [1, 2], cols: [1, 2, 5] },
+    { name: "Income", rows: [1, 2, 3], cols: [1, 2] },
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var sheet = ss.getSheetByName(candidates[i].name);
+    if (!sheet) continue;
+    for (var r = 0; r < candidates[i].rows.length; r++) {
+      for (var c = 0; c < candidates[i].cols.length; c++) {
+        var cell = sheet.getRange(candidates[i].rows[r], candidates[i].cols[c]);
+        var bg = String(cell.getBackground() || "").toLowerCase();
+        if (bg && bg !== "#ffffff" && bg !== "#fff") {
+          return {
+            bg: bg,
+            fg: cell.getFontColor() || fallback.fg,
+            fontFamily: cell.getFontFamily() || fallback.fontFamily,
+            fontSize: cell.getFontSize() || fallback.fontSize,
+          };
+        }
+      }
+    }
+  }
+  return fallback;
+}
+
+function styleTargetHeaderRow(sheet, headers, style, widths) {
+  sheet.setFrozenRows(1);
+  var headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setValues([headers]);
+  headerRange.setBackground(style.bg);
+  headerRange.setFontColor(style.fg);
+  headerRange.setFontFamily(style.fontFamily);
+  headerRange.setFontSize(style.fontSize);
+  headerRange.setFontWeight("bold");
+  headerRange.setVerticalAlignment("middle");
+  headerRange.setBorder(true, true, true, true, true, true, "#D9E2DC", SpreadsheetApp.BorderStyle.SOLID);
+  sheet.setRowHeight(1, 28);
+  for (var i = 0; i < widths.length; i++) {
+    sheet.setColumnWidth(i + 1, widths[i]);
+  }
+}
+
+function ensureTargetSheets(ss) {
+  var style = getReferenceHeaderStyle(ss);
+
+  var targetsSheet = ss.getSheetByName("Targets");
+  if (!targetsSheet) {
+    targetsSheet = ss.insertSheet("Targets");
+    styleTargetHeaderRow(
+      targetsSheet,
+      ["ID", "Nama Target", "Nominal Target", "Terkumpul", "Kurang", "Progress", "Status", "Catatan", "Dibuat"],
+      style,
+      [95, 220, 145, 145, 145, 95, 110, 240, 110]
+    );
+    targetsSheet.getRange("C2:E").setNumberFormat('"Rp "#,##0');
+    targetsSheet.getRange("F2:F").setNumberFormat("0.0%");
+    targetsSheet.getRange("I2:I").setNumberFormat("yyyy-mm-dd");
+    var rule = SpreadsheetApp.newDataValidation().requireValueInList(TARGET_STATUSES, true).build();
+    targetsSheet.getRange("G2:G").setDataValidation(rule);
+  }
+
+  var logsSheet = ss.getSheetByName("TargetLogs");
+  if (!logsSheet) {
+    logsSheet = ss.insertSheet("TargetLogs");
+    styleTargetHeaderRow(
+      logsSheet,
+      ["Log ID", "Tanggal", "Target ID", "Nama Target", "Nominal", "Keterangan", "Sumber Periode"],
+      style,
+      [95, 110, 95, 200, 145, 240, 125]
+    );
+    logsSheet.getRange("B2:B").setNumberFormat("yyyy-mm-dd");
+    logsSheet.getRange("E2:E").setNumberFormat('"Rp "#,##0');
+  }
+
+  return { targetsSheet: targetsSheet, logsSheet: logsSheet };
+}
+
+function styleDataRow(sheet, rowNum, colCount) {
+  var rowRange = sheet.getRange(rowNum, 1, 1, colCount);
+  rowRange.setBackground(rowNum % 2 === 0 ? "#FFFFFF" : "#F4F9F5");
+  rowRange.setBorder(true, true, true, true, true, true, "#D9E2DC", SpreadsheetApp.BorderStyle.SOLID);
+  rowRange.setVerticalAlignment("middle");
+}
+
+function nextSequentialId(sheet, prefix) {
+  var lastRow = sheet.getLastRow();
+  var maxNum = 0;
+  if (lastRow >= 2) {
+    var vals = sheet.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+    var re = new RegExp("^" + prefix + "-(\\d+)$", "i");
+    for (var i = 0; i < vals.length; i++) {
+      var m = re.exec(String(vals[i][0] || "").trim());
+      if (m) {
+        var n = Number(m[1]);
+        if (n > maxNum) maxNum = n;
+      }
+    }
+  }
+  var next = String(maxNum + 1);
+  while (next.length < 3) next = "0" + next;
+  return prefix + "-" + next;
+}
+
+function readAllTargets(ss) {
+  var sheets = ensureTargetSheets(ss);
+  var sheet = sheets.targetsSheet;
+  var tz = ss.getSpreadsheetTimeZone();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  var raw = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+  var disp = sheet.getRange(2, 1, lastRow - 1, 9).getDisplayValues();
+  var list = [];
+  for (var i = 0; i < raw.length; i++) {
+    var id = String(disp[i][0] || "").trim();
+    var name = String(disp[i][1] || "").trim();
+    if (!id && !name) continue;
+    var targetAmount = parseNumber(raw[i][2]);
+    var collectedAmount = parseNumber(raw[i][3]);
+    var remainingAmount = Math.max(0, targetAmount - collectedAmount);
+    var progressPercent = targetAmount > 0 ? Number(((collectedAmount / targetAmount) * 100).toFixed(1)) : 0;
+    var parsedCreated = parseDateValue(raw[i][8], disp[i][8], tz);
+    list.push({
+      rowNumber: i + 2,
+      id: id,
+      name: name,
+      targetAmount: targetAmount,
+      collectedAmount: collectedAmount,
+      remainingAmount: remainingAmount,
+      progressPercent: progressPercent,
+      status: String(disp[i][6] || "Aktif").trim() || "Aktif",
+      note: String(disp[i][7] || "").trim(),
+      createdAt: parsedCreated ? parsedCreated.iso : "",
+    });
+  }
+  return list;
+}
+
+function handleTargetsList(ss, params) {
+  var statusFilter = params && params.status ? String(params.status).trim().toLowerCase() : "";
+  var includeArchived = Boolean(params && params.includeArchived);
+  var all = readAllTargets(ss);
+  var targets = [];
+  for (var i = 0; i < all.length; i++) {
+    var t = all[i];
+    var st = String(t.status || "").toLowerCase();
+    if (statusFilter) {
+      if (st !== statusFilter) continue;
+    } else if (!includeArchived && st === "arsip") {
+      continue;
+    }
+    targets.push(t);
+  }
+  return { targets: targets };
+}
+
+function handleTargetsLogs(ss, params) {
+  var sheets = ensureTargetSheets(ss);
+  var sheet = sheets.logsSheet;
+  var tz = ss.getSpreadsheetTimeZone();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { logs: [], totalMatchedAmount: 0 };
+
+  var targetFilter = params && params.targetId ? String(params.targetId).trim().toLowerCase() : "";
+  var periodFilter = params && params.sourcePeriod ? String(params.sourcePeriod).trim().toLowerCase() : "";
+  var limit = Math.min(Math.max(Number(params && params.limit) || 20, 1), 100);
+
+  var raw = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+  var disp = sheet.getRange(2, 1, lastRow - 1, 7).getDisplayValues();
+  var matched = [];
+  var totalMatchedAmount = 0;
+
+  for (var i = raw.length - 1; i >= 0; i--) {
+    var logId = String(disp[i][0] || "").trim();
+    var targetId = String(disp[i][2] || "").trim();
+    if (!logId && !targetId) continue;
+    var sourcePeriod = String(disp[i][6] || "").trim();
+    if (targetFilter && targetId.toLowerCase() !== targetFilter) continue;
+    if (periodFilter && sourcePeriod.toLowerCase() !== periodFilter) continue;
+
+    var amount = parseNumber(raw[i][4]);
+    var parsedDate = parseDateValue(raw[i][1], disp[i][1], tz);
+    totalMatchedAmount += amount;
+    matched.push({
+      rowNumber: i + 2,
+      logId: logId,
+      date: parsedDate ? parsedDate.iso : "",
+      targetId: targetId,
+      targetName: String(disp[i][3] || "").trim(),
+      amount: amount,
+      note: String(disp[i][5] || "").trim(),
+      sourcePeriod: sourcePeriod,
+    });
+  }
+
+  return {
+    logs: matched.slice(0, limit),
+    totalMatchedAmount: totalMatchedAmount,
+  };
+}
+
+function handleTargetsCreate(ss, params) {
+  var name = String((params && params.name) || "").trim();
+  var targetAmount = Number(params && params.targetAmount);
+  var note = String((params && params.note) || "").trim();
+  var status = String((params && params.status) || "Aktif").trim() || "Aktif";
+  if (!name) throw new Error("Nama target wajib diisi.");
+  if (!isFinite(targetAmount) || targetAmount <= 0) throw new Error("Nominal target harus lebih dari 0.");
+  if (TARGET_STATUSES.indexOf(status) === -1) throw new Error("Status target tidak valid: " + status);
+
+  var sheets = ensureTargetSheets(ss);
+  var existing = readAllTargets(ss);
+  for (var i = 0; i < existing.length; i++) {
+    if (existing[i].status.toLowerCase() !== "arsip" && existing[i].name.toLowerCase() === name.toLowerCase()) {
+      throw new Error("Target aktif dengan nama '" + name + "' sudah ada (" + existing[i].id + ").");
+    }
+  }
+
+  var sheet = sheets.targetsSheet;
+  var id = nextSequentialId(sheet, "TGT");
+  var rowNum = Math.max(sheet.getLastRow() + 1, 2);
+  var createdDate = params && params.date ? isoToLocalDate(params.date) : new Date();
+
+  sheet.getRange(rowNum, 1).setValue(id);
+  sheet.getRange(rowNum, 2).setValue(name);
+  sheet.getRange(rowNum, 3).setValue(Math.round(targetAmount)).setNumberFormat('"Rp "#,##0');
+  sheet.getRange(rowNum, 4).setFormula("=SUMIF(TargetLogs!$C:$C, A" + rowNum + ", TargetLogs!$E:$E)").setNumberFormat('"Rp "#,##0');
+  sheet.getRange(rowNum, 5).setFormula("=MAX(0, C" + rowNum + "-D" + rowNum + ")").setNumberFormat('"Rp "#,##0');
+  sheet.getRange(rowNum, 6).setFormula("=IF(C" + rowNum + ">0, D" + rowNum + "/C" + rowNum + ", 0)").setNumberFormat("0.0%");
+  sheet.getRange(rowNum, 7).setValue(status);
+  sheet.getRange(rowNum, 8).setValue(note);
+  sheet.getRange(rowNum, 9).setValue(createdDate).setNumberFormat("yyyy-mm-dd");
+  styleDataRow(sheet, rowNum, 9);
+  SpreadsheetApp.flush();
+
+  var updated = readAllTargets(ss);
+  for (var j = 0; j < updated.length; j++) {
+    if (updated[j].id === id) return updated[j];
+  }
+  return { id: id, name: name, targetAmount: Math.round(targetAmount), collectedAmount: 0, remainingAmount: Math.round(targetAmount), progressPercent: 0, status: status, note: note, rowNumber: rowNum };
+}
+
+function findTargetById(all, targetId) {
+  var key = String(targetId || "").trim().toLowerCase();
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].id.toLowerCase() === key) return all[i];
+  }
+  return null;
+}
+
+function handleTargetsAddDeposit(ss, params) {
+  var targetId = String((params && params.targetId) || "").trim();
+  var amount = Number(params && params.amount);
+  var note = String((params && params.note) || "").trim();
+  var sourcePeriod = String((params && params.sourcePeriod) || "").trim();
+  if (!targetId) throw new Error("targetId wajib diisi.");
+  if (!isFinite(amount) || amount <= 0) throw new Error("Nominal setoran harus lebih dari 0.");
+
+  var sheets = ensureTargetSheets(ss);
+  var all = readAllTargets(ss);
+  var target = findTargetById(all, targetId);
+  if (!target) throw new Error("Target '" + targetId + "' tidak ditemukan.");
+  if (target.status.toLowerCase() === "arsip") {
+    throw new Error("Target '" + target.name + "' sudah diarsipkan. Aktifkan dulu jika ingin menabung lagi.");
+  }
+
+  var logsSheet = sheets.logsSheet;
+  var logId = nextSequentialId(logsSheet, "LOG");
+  var rowNum = Math.max(logsSheet.getLastRow() + 1, 2);
+  var depositDate = params && params.date ? isoToLocalDate(params.date) : new Date();
+
+  logsSheet.getRange(rowNum, 1).setValue(logId);
+  logsSheet.getRange(rowNum, 2).setValue(depositDate).setNumberFormat("yyyy-mm-dd");
+  logsSheet.getRange(rowNum, 3).setValue(target.id);
+  logsSheet.getRange(rowNum, 4).setValue(target.name);
+  logsSheet.getRange(rowNum, 5).setValue(Math.round(amount)).setNumberFormat('"Rp "#,##0');
+  logsSheet.getRange(rowNum, 6).setValue(note);
+  logsSheet.getRange(rowNum, 7).setValue(sourcePeriod);
+  styleDataRow(logsSheet, rowNum, 7);
+  SpreadsheetApp.flush();
+
+  var refreshed = findTargetById(readAllTargets(ss), target.id) || target;
+  if (refreshed.status === "Aktif" && refreshed.collectedAmount >= refreshed.targetAmount) {
+    sheets.targetsSheet.getRange(refreshed.rowNumber, 7).setValue("Tercapai");
+    SpreadsheetApp.flush();
+    refreshed = findTargetById(readAllTargets(ss), target.id) || refreshed;
+  }
+
+  var tz = ss.getSpreadsheetTimeZone();
+  return {
+    log: {
+      rowNumber: rowNum,
+      logId: logId,
+      date: Utilities.formatDate(depositDate, tz, "yyyy-MM-dd"),
+      targetId: target.id,
+      targetName: target.name,
+      amount: Math.round(amount),
+      note: note,
+      sourcePeriod: sourcePeriod,
+    },
+    target: refreshed,
+  };
+}
+
+function handleTargetsUpdate(ss, params) {
+  var targetId = String((params && params.targetId) || "").trim();
+  var patch = (params && params.patch) || {};
+  var expected = (params && params.expected) || {};
+  if (!targetId) throw new Error("targetId wajib diisi.");
+
+  var sheets = ensureTargetSheets(ss);
+  var all = readAllTargets(ss);
+  var target = findTargetById(all, targetId);
+  if (!target) throw new Error("Target '" + targetId + "' tidak ditemukan.");
+
+  if (expected.name && target.name.toLowerCase() !== String(expected.name).trim().toLowerCase()) {
+    throw new Error("Data target sudah berubah (nama sekarang: " + target.name + ").");
+  }
+  if (expected.status && target.status.toLowerCase() !== String(expected.status).trim().toLowerCase()) {
+    throw new Error("Status target sudah berubah (status sekarang: " + target.status + ").");
+  }
+
+  var sheet = sheets.targetsSheet;
+  var r = target.rowNumber;
+  if (patch.name !== undefined) {
+    var nextName = String(patch.name || "").trim();
+    if (!nextName) throw new Error("Nama target tidak boleh kosong.");
+    sheet.getRange(r, 2).setValue(nextName);
+  }
+  if (patch.targetAmount !== undefined) {
+    var nextAmt = Number(patch.targetAmount);
+    if (!isFinite(nextAmt) || nextAmt <= 0) throw new Error("Nominal target harus lebih dari 0.");
+    sheet.getRange(r, 3).setValue(Math.round(nextAmt));
+  }
+  if (patch.status !== undefined) {
+    var nextStatus = String(patch.status || "").trim();
+    if (TARGET_STATUSES.indexOf(nextStatus) === -1) throw new Error("Status tidak valid: " + nextStatus);
+    sheet.getRange(r, 7).setValue(nextStatus);
+  }
+  if (patch.note !== undefined) {
+    sheet.getRange(r, 8).setValue(String(patch.note || "").trim());
+  }
+
+  SpreadsheetApp.flush();
+  return findTargetById(readAllTargets(ss), target.id) || target;
+}
+
+function handleTargetsDeleteLog(ss, params) {
+  var logId = String((params && params.logId) || "").trim();
+  var expected = (params && params.expected) || {};
+  if (!logId) throw new Error("logId wajib diisi.");
+
+  var sheets = ensureTargetSheets(ss);
+  var logsSheet = sheets.logsSheet;
+  var lastRow = logsSheet.getLastRow();
+  if (lastRow < 2) throw new Error("Log setoran tidak ditemukan: " + logId);
+
+  var raw = logsSheet.getRange(2, 1, lastRow - 1, 7).getValues();
+  var disp = logsSheet.getRange(2, 1, lastRow - 1, 7).getDisplayValues();
+  var foundRow = -1;
+  var linkedTargetId = "";
+  var foundAmount = 0;
+
+  for (var i = 0; i < disp.length; i++) {
+    if (String(disp[i][0] || "").trim().toLowerCase() === logId.toLowerCase()) {
+      foundRow = i + 2;
+      linkedTargetId = String(disp[i][2] || "").trim();
+      foundAmount = parseNumber(raw[i][4]);
+      break;
+    }
+  }
+  if (foundRow === -1) throw new Error("Log setoran '" + logId + "' tidak ditemukan.");
+  if (params && params.rowNumber && Number(params.rowNumber) !== foundRow) {
+    throw new Error("Posisi baris log '" + logId + "' berubah (sekarang di baris #" + foundRow + "). Silakan ulangi.");
+  }
+  if (expected.targetId && linkedTargetId.toLowerCase() !== String(expected.targetId).trim().toLowerCase()) {
+    throw new Error("Log '" + logId + "' bukan milik target yang diharapkan.");
+  }
+  if (expected.amount !== undefined && Math.round(foundAmount) !== Math.round(Number(expected.amount))) {
+    throw new Error("Nominal log '" + logId + "' sudah berubah (sekarang: " + foundAmount + ").");
+  }
+
+  logsSheet.deleteRow(foundRow);
+  SpreadsheetApp.flush();
+
+  var refreshed = linkedTargetId ? findTargetById(readAllTargets(ss), linkedTargetId) : null;
+  if (refreshed && refreshed.status === "Tercapai" && refreshed.collectedAmount < refreshed.targetAmount) {
+    sheets.targetsSheet.getRange(refreshed.rowNumber, 7).setValue("Aktif");
+    SpreadsheetApp.flush();
+    refreshed = findTargetById(readAllTargets(ss), linkedTargetId);
+  }
+
+  return { deleted: true, logId: logId, target: refreshed };
 }

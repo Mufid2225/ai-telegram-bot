@@ -121,11 +121,11 @@ function yahooQuoteResult(symbol, shortName, price) {
   };
 }
 
-test("homeKeyboard keeps all legacy rows and adds Info & Riset before Panduan/Tutup", () => {
+test("homeKeyboard keeps MoneyTracker hub, legacy rows, and adds Info & Riset before Panduan/Tutup", () => {
   const kb = homeKeyboard();
   const flat = kb.flat().map((b) => b.callback_data);
   for (const cb of [
-    "menu:summary", "menu:expenses:0", "menu:notes", "menu:reminders", "menu:ws:calendar",
+    "menu:money", "menu:notes", "menu:reminders", "menu:ws:calendar",
     "menu:ws:trello", "menu:ws:notion", "menu:ws:superhuman", "menu:ws:kb", "menu:help", "menu:close",
   ]) {
     assert.ok(flat.includes(cb), `missing legacy callback ${cb}`);

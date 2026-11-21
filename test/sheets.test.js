@@ -41,3 +41,64 @@ test("sheets service surfaces Apps Script errors and HTTP failures", async () =>
   );
   await assert.rejects(() => httpFail.addExpenses([]), /500/);
 });
+
+test("sheets service dispatches targets_* actions with expected payloads", async () => {
+  const calls = [];
+  const sheets = createSheetsService(
+    { sheetWebhookUrl: "https://script.google.com/macros/s/test/exec", sheetApiSecret: "sec-123" },
+    async (_url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push(body);
+      return new Response(JSON.stringify({ ok: true, data: { action: body.action } }), { status: 200 });
+    }
+  );
+
+  await sheets.listTargets({ status: "Aktif" });
+  await sheets.listTargetLogs({ targetId: "TGT-001", sourcePeriod: "2026-10", limit: 50 });
+  await sheets.createTarget({ name: "Monitor", targetAmount: 2500000, note: "Promo" });
+  await sheets.addTargetDeposit({ targetId: "TGT-001", amount: 500000, note: "Sisa Okt", sourcePeriod: "2026-10" });
+  await sheets.updateTarget({ targetId: "TGT-001", expected: { name: "Monitor" }, patch: { status: "Ditunda" } });
+  await sheets.deleteTargetLog({ logId: "LOG-001", rowNumber: 2, expected: { amount: 500000 } });
+
+  assert.deepEqual(
+    calls.map((c) => c.action),
+    [
+      "targets_list",
+      "targets_logs",
+      "targets_create",
+      "targets_add_deposit",
+      "targets_update",
+      "targets_delete_log",
+    ]
+  );
+  assert.equal(calls[0].status, "Aktif");
+  assert.equal(calls[1].sourcePeriod, "2026-10");
+  assert.equal(calls[2].targetAmount, 2500000);
+  assert.equal(calls[3].sourcePeriod, "2026-10");
+  assert.equal(calls[4].patch.status, "Ditunda");
+  assert.equal(calls[5].logId, "LOG-001");
+});
+
+test("sheets service dispatches get_income_overview, update_allocations, and get_usage", async () => {
+  const calls = [];
+  const sheets = createSheetsService(
+    { sheetWebhookUrl: "https://script.google.com/macros/s/test/exec", sheetApiSecret: "sec-123" },
+    async (_url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push(body);
+      return new Response(JSON.stringify({ ok: true, data: { action: body.action } }), { status: 200 });
+    }
+  );
+
+  await sheets.getIncomeOverview({ month: "November", year: 2026 });
+  await sheets.updateAllocations({ updates: [{ kategori: "Makan", percent: 25, expectedPercent: 20 }] });
+  await sheets.getUsage({ maxRows: 40 });
+
+  assert.deepEqual(
+    calls.map((c) => c.action),
+    ["get_income_overview", "update_allocations", "get_usage"]
+  );
+  assert.equal(calls[0].month, "November");
+  assert.equal(calls[1].updates[0].percent, 25);
+  assert.equal(calls[2].maxRows, 40);
+});

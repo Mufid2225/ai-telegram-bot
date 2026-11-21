@@ -12,6 +12,14 @@ test("buildConfirmExtra preserves money: prefix for finance drafts and uses acti
   assert.equal(wsKb[1].callback_data, "action:cancel:def456");
 });
 
+test("buildConfirmExtra uses money: prefix for savings target drafts", () => {
+  for (const kind of ["create_target", "add_target_deposit", "update_target", "delete_target_log", "update_allocations"]) {
+    const kb = buildConfirmExtra({ id: "tgt123", kind }).reply_markup.inline_keyboard[0];
+    assert.equal(kb[0].callback_data, "money:confirm:tgt123");
+    assert.equal(kb[1].callback_data, "money:cancel:tgt123");
+  }
+});
+
 test("chunks replies within Telegram limit", () => {
   const chunks = splitTelegramText("word ".repeat(2000));
   assert.ok(chunks.length > 1);

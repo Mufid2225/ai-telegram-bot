@@ -10,6 +10,8 @@ import { workspaceTools, executeWorkspaceTool } from "./tools/workspace.js";
 import { calendarTools, executeCalendarTool } from "./tools/calendar.js";
 import { researchTools, executeResearchTool } from "./tools/research.js";
 import { infoTools, executeInfoTool } from "./tools/info.js";
+import { targetTools, executeTargetTool } from "./tools/targets.js";
+import { moneyExtraTools, executeMoneyExtraTool } from "./tools/money-extra.js";
 import { redactSecrets } from "./utils/errors.js";
 
 function fnTool(name, description, properties, required = []) {
@@ -207,6 +209,8 @@ export const tools = [
   ...calendarTools,
   ...researchTools,
   ...infoTools,
+  ...targetTools,
+  ...moneyExtraTools,
 ];
 
 function getCurrentTime(format = "full") {
@@ -403,6 +407,10 @@ export async function executeTool(name, args = {}, context = {}) {
         await deleteFacts(context.userId, args.entity, args.attribute || null, context.pool);
         return `Fakta "${args.entity}"${args.attribute ? ` (${args.attribute})` : ""} dihapus.`;
       default: {
+        const targetResult = await executeTargetTool(name, args, context);
+        if (targetResult !== null) return targetResult;
+        const extraMoneyResult = await executeMoneyExtraTool(name, args, context);
+        if (extraMoneyResult !== null) return extraMoneyResult;
         const wsResult = await executeWorkspaceTool(name, args, context);
         if (wsResult !== null) return wsResult;
         const calResult = await executeCalendarTool(name, args, context);

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createDatabase } from "../src/database.js";
 import { createPendingActionsStore } from "../src/services/money.js";
-import { handleMoneyCallback, sendFinanceChart } from "../src/handlers/money.js";
+import { handleMoneyCallback, sendFinanceChart, handleTargetCommand } from "../src/handlers/money.js";
 
 function makeCallbackCtx(userId, messageText = "Draft Catat") {
   const answers = [];
@@ -151,4 +151,55 @@ test("sendFinanceChart retries once on transient upload failure and degrades gra
     replyWithPhoto: async () => { throw new Error("ECONNRESET"); },
   };
   assert.equal(await sendFinanceChart(failCtx, buf, "MoneyTracker — November 2026"), false);
+});
+
+test("handleTargetCommand displays formatted targets when called without args and delegates to callAI with args", async () => {
+  const replies = [];
+  const makeMsgCtx = (text) => ({
+    from: { id: "123456789" },
+    chat: { id: "123456789" },
+    message: { text },
+    telegram: { sendChatAction: async () => {} },
+    reply: async (msg, extra) => replies.push({ msg, extra }),
+  });
+
+  await handleTargetCommand({
+    ctx: makeMsgCtx("/target"),
+    sheetsService: {
+      listTargets: async () => ({
+        targets: [
+          {
+            id: "TGT-001",
+            name: "SSD NVMe",
+            targetAmount: 1500000,
+            collectedAmount: 750000,
+            remainingAmount: 750000,
+            progressPercent: 50,
+            status: "Aktif",
+            note: "",
+          },
+        ],
+      }),
+    },
+  });
+  assert.match(replies[0].msg, /SSD NVMe/);
+  assert.match(replies[0].msg, /\[█████░░░░░\] 50%/);
+
+  let aiOpts;
+  await handleTargetCommand({
+    ctx: makeMsgCtx("/target nabung ssd 250rb"),
+    callAI: async (_msgs, _ctx, opts) => {
+      aiOpts = opts;
+      opts.toolContext.pendingAction = { id: "abcd1234", kind: "add_target_deposit" };
+      return "Draft setoran dibuat.";
+    },
+    pool: {},
+    sheetsService: {},
+    pendingStore: {},
+    reminderStore: {},
+    dateStr: "Sabtu, 21 November 2026",
+  });
+  assert.ok(aiOpts.tools.some((t) => t.function.name === "money_propose_add_target_deposit"));
+  assert.equal(replies[1].msg, "Draft setoran dibuat.");
+  assert.equal(replies[1].extra.reply_markup.inline_keyboard[0][0].callback_data, "money:confirm:abcd1234");
 });
