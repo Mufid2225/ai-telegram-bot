@@ -33,7 +33,7 @@ Single source of truth di Google Sheets via Apps Script Web App:
 - `/keuangan` — ringkasan Dashboard + grafik PNG
 - `/pengeluaran` — daftar transaksi terbaru + nomor baris
 - `/catat`, chat natural, atau foto struk/QRIS → draft transaksi, income (tambah sumber baru/nilai), atau ubah persentase tabel Alokasi dengan konfirmasi `[✅ Simpan]` / `[❌ Batal]`
-- Read-only `Usage` (`money_get_usage`) & overview `Income` (`money_get_income_overview`) lewat chat tanpa menyentuh rumus spreadsheet
+- Read-only `Usage` (`money_get_usage`, per bulan & rekap setahun Jan–Des) & overview `Income` (`money_get_income_overview`, per bulan) lewat chat maupun `/menu` tanpa menyentuh rumus spreadsheet
 - `/target` atau chat natural — target tabungan (`Targets` & `TargetLogs` dengan formula `SUMIF` dan tampilan serasi) + cek & alokasi sisa uang bulan kemarin dengan konfirmasi tombol
 - Konsultasi budget & simulasi mingguan tanpa mencatat transaksi palsu
 
@@ -55,7 +55,7 @@ Chain provider: **Tavily** (primer) → **NewsAPI** → **SerpAPI** → fallback
 
 ## Menu Interaktif Dua Halaman
 
-`/menu` (atau `/start`) membuka hub dengan status cepat dan tombol **`💰 MoneyTracker`** (untuk memilih sheet: Ringkasan, Expenses, Income & Alokasi, Targets, Riwayat Setoran, Usage, dan Sisa Bulan Lalu). Tombol **➡️ Info & Riset** mengganti **hanya keyboard** (teks pesan tetap) ke halaman 2:
+`/menu` (atau `/start`) membuka hub dengan status cepat dan tombol **`💰 MoneyTracker`** (untuk memilih sheet: Ringkasan, Expenses, Income & Alokasi + pilih bulan, Targets, Riwayat Setoran, Usage + pilih bulan & rekap setahun, dan Sisa Bulan Lalu). Tombol **➡️ Info & Riset** mengganti **hanya keyboard** (teks pesan tetap) ke halaman 2:
 
 | Tombol | Perilaku |
 |--------|----------|
@@ -139,6 +139,7 @@ Cache TTL (melindungi kuota): quote 60s • berita/search 10m • sentimen/tekni
 | `/catat` | `/catat bensin 25rb cash` | Draft pengeluaran/pemasukan + konfirmasi |
 | `/keuangan` | `/keuangan november` | Ringkasan Dashboard + grafik PNG |
 | `/pengeluaran` | `/pengeluaran november` | Daftar transaksi + nomor baris |
+| `/target` | `/target beli ssd 1.5jt` | Progres target tabungan, nabung & alokasi sisa bulan lalu |
 | `/saham` | `/saham BBCA` | Analisis saham + chart PNG |
 | `/ekonomi` | `/ekonomi` | Ringkasan makro global |
 | `/cari` | `/cari IPO terbaru 2026` | Web search + rangkuman AI |
@@ -202,7 +203,7 @@ Bot connect long-polling, health check di `PORT`, dan membuat `data.db` otomatis
 
 ### Test
 ```bash
-npm test        # 195 test, 100% offline (mock fetch, SQLite :memory:, tmp dir)
+npm test        # 206 test, 100% offline (mock fetch, SQLite :memory:, tmp dir)
 node --check src/index.js
 ```
 
@@ -220,14 +221,14 @@ src/
 ├── memory.js      # Knowledge graph & memory
 ├── tools.js       # Registrasi + dispatch gabungan AI tools
 ├── tools/         # targets (7), money-extra (3), workspace (15), calendar (5), research (7), info (7)
-├── handlers/      # menu, info-menu, workspace-menu, actions, money, market,
-│                  # tasks, files, messages
+├── handlers/      # menu, money-menu, info-menu, workspace-menu, actions,
+│                  # money, market, tasks, files, messages
 ├── services/      # ai, sheets, calendar, trello, notion, superhuman, kb,
 │                  # market, alpha, fmp, chart, search, jina, bmkg, holidays,
 │                  # coingecko, fx, weather, worldbank, pending, reminder,
 │                  # workspace, inputRequest, money
 └── utils/         # cache, telegram, errors, http, soul, infoInput
-test/              # 195 test offline (node --test)
+test/              # 206 test offline (node --test)
 ```
 
 ## Dependencies
